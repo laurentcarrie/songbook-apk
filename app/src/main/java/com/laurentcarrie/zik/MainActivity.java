@@ -2,7 +2,9 @@ package com.laurentcarrie.zik;
 
 import android.app.Activity;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.pdf.PdfRenderer;
 import java.io.File;
 import android.os.Bundle;
@@ -56,6 +58,13 @@ public class MainActivity extends Activity {
     private int startMs, endMs, durationMs, minGapMs = 2000;
     private File currentFile;
     private SharedPreferences prefs;
+    // Bar slider: highlights bar n of the chord chart, when the song has bar positions
+    private TextView sectionLabel, missingClicks;
+    private android.widget.FrameLayout sectionRow;
+    private BarCells cells;
+    private int highlight; // bar number shown, 0 for none
+    /** Times (seconds) of the beats of the recording, bar 1 beat 1 first; null when not delivered. */
+    private double[] clickTimes;
     private final android.os.Handler handler = new android.os.Handler();
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
@@ -185,6 +194,7 @@ public class MainActivity extends Activity {
             @Override void changed(int v) {
                 if (player != null) player.seekTo(v);
                 posLabel.setText("Position  " + time(v));
+                followBar(v);
             }
         });
         startBar.setOnSeekBarChangeListener(new SimpleSeek() {
@@ -211,6 +221,30 @@ public class MainActivity extends Activity {
         loopBox.setChecked(prefs.getBoolean("loop", false));
         loopBox.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean("loop", on).apply());
         rangePanel.addView(loopBox);
+
+        // the name of the section being played rides above the thumb of the position slider
+        sectionRow = new android.widget.FrameLayout(this);
+        sectionLabel = new TextView(this);
+        sectionLabel.setTextSize(18);
+        sectionLabel.setTypeface(null, android.graphics.Typeface.BOLD);
+        sectionLabel.setSingleLine(true);
+        sectionLabel.setIncludeFontPadding(false);
+        sectionLabel.setPadding(0, 0, 0, 0);
+        sectionRow.addView(sectionLabel, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT));
+        sectionRow.setVisibility(View.GONE);
+        rangePanel.addView(sectionRow, 0, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        // thin red notice when the bars are only estimated from the tempo
+        missingClicks = new TextView(this);
+        missingClicks.setTextSize(12);
+        missingClicks.setTextColor(Color.RED);
+        missingClicks.setText("Clics manquants : mesure estimée d'après le tempo");
+        missingClicks.setVisibility(View.GONE);
+        rangePanel.addView(missingClicks, 0, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        rangePanel.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> placeSectionLabel());
 
         root.addView(bar, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -459,6 +493,15 @@ public class MainActivity extends Activity {
         }
         posBar.setProgress(pos);
         posLabel.setText("Position  " + time(pos));
+        followBar(pos);
+    }
+
+    /** The recording is the one the clicks were measured on: move the highlight to the bar at this time. */
+    private void followBar(int pos) {
+        if (!following()) { placeSectionLabel(); return; }
+        int bar = barAt(pos);
+        if (bar != highlight) selectBar(bar);
+        placeSectionLabel();
     }
 
     /** ▶ marks the file being played, ⏸ the one that is paused; the ⏸ / ▶ and ■ buttons appear while a file is loaded. */
@@ -493,11 +536,92 @@ public class MainActivity extends Activity {
             pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
             renderer = new PdfRenderer(pfd);
             page = 0;
+            loadCells(file);
             showPage();
         } catch (Exception e) {
             closePdf();
             Toast.makeText(this, "Impossible d'ouvrir le PDF : " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    /** Loads the bar positions and beat times of the song; the chart starts on bar 1. */
+    private void loadCells(File pdf) {
+        cells = BarCells.load(pdf);
+        clickTimes = loadClicks(pdf);
+        highlight = 0;
+        if (cells == null) return;
+        highlight = 1;
+        if (cells.page[0] > 0) page = Math.min(cells.page[0] - 1, renderer.getPageCount() - 1);
+    }
+
+    /** Highlights bar n (1-based), turning to its page if needed. */
+    private void selectBar(int n) {
+        if (cells == null || n < 1 || n > cells.count) return;
+        highlight = n;
+        int p = cells.page[n - 1];
+        if (p > 0 && renderer != null) page = Math.min(p - 1, renderer.getPageCount() - 1);
+        showPage();
+    }
+
+    /** True while the chart follows the recording: bar positions and beat times are there. */
+    private boolean following() {
+        return cells != null && (clickTimes != null || songTempo > 0) && currentFile != null
+                && "mp3".equals(currentFile.getParentFile().getName());
+    }
+
+    /** Puts the section name over the thumb of the position slider, left-aligned on it at the start and right-aligned at the end. */
+    private void placeSectionLabel() {
+        boolean on = following() && highlight >= 1;
+        sectionRow.setVisibility(on ? View.VISIBLE : View.GONE);
+        missingClicks.setVisibility(on && clickTimes == null ? View.VISIBLE : View.GONE);
+        if (!on || posBar.getWidth() == 0) return;
+        sectionLabel.setText(cells.section[highlight - 1]);
+        sectionLabel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        float usable = posBar.getWidth() - posBar.getPaddingLeft() - posBar.getPaddingRight();
+        float frac = posBar.getMax() == 0 ? 0 : (float) posBar.getProgress() / posBar.getMax();
+        float thumb = posBar.getLeft() + posBar.getPaddingLeft() + frac * usable;
+        float x = thumb - frac * sectionLabel.getMeasuredWidth();
+        float max = sectionRow.getWidth() - sectionLabel.getMeasuredWidth();
+        sectionLabel.setTranslationX(Math.max(0, Math.min(x, max)));
+    }
+
+    /** The beat times of the recording: delivery/clicks/&lt;pdf stem&gt;-clicks.yml, a list of seconds. */
+    private static double[] loadClicks(File pdf) {
+        String name = pdf.getName();
+        if (name.endsWith(".pdf")) name = name.substring(0, name.length() - 4);
+        File f = new File(Storage.DELIVERY, "clicks/" + name + "-clicks.yml");
+        if (!f.isFile()) return null;
+        try (java.io.InputStream in = new java.io.FileInputStream(f)) {
+            Object root = new org.yaml.snakeyaml.Yaml().load(in);
+            Object list = root instanceof java.util.Map ? ((java.util.Map<?, ?>) root).get("clicks") : null;
+            if (!(list instanceof java.util.List) || ((java.util.List<?>) list).isEmpty()) return null;
+            java.util.List<?> l = (java.util.List<?>) list;
+            double[] t = new double[l.size()];
+            for (int i = 0; i < t.length; i++) t[i] = ((Number) l.get(i)).doubleValue();
+            return t;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Bar (1-based) being played at this time of the recording: 4 beats a bar, from the first click (or from the tempo when there are no clicks). */
+    private int barAt(int ms) {
+        double t = ms / 1000.0;
+        if (clickTimes == null) {
+            // no beat times: 4 beats a bar at the song tempo from the start of the file; when that
+            // would run past the end of the file, squeeze the bars to fit the duration
+            double barLen = 240.0 / songTempo;
+            double d = durationMs / 1000.0;
+            if (d > 0 && barLen * cells.count > d) barLen = d / cells.count;
+            return Math.max(1, Math.min(cells.count, (int) (t / barLen) + 1));
+        }
+        int lo = 0, hi = clickTimes.length; // number of clicks at or before t
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (clickTimes[mid] <= t) lo = mid + 1; else hi = mid;
+        }
+        int bar = lo <= 0 ? 1 : (lo - 1) / 4 + 1;
+        return Math.min(bar, cells.count);
     }
 
     private void closePdf() {
@@ -522,8 +646,28 @@ public class MainActivity extends Activity {
         p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
         p.close();
 
+        // the highlighted bar, when it is on this page
+        int scrollTo = 0;
+        if (cells != null && highlight >= 1 && cells.page[highlight - 1] == page + 1) {
+            float k = bmp.getWidth() / cells.pageW;
+            float cx = cells.x[highlight - 1] * k, cy = cells.y[highlight - 1] * k;
+            float cw = cells.w[highlight - 1] * k, ch = cells.h[highlight - 1] * k;
+            Canvas canvas = new Canvas(bmp);
+            Paint paint = new Paint();
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.argb(90, 255, 214, 0));
+            canvas.drawRect(cx, cy, cx + cw, cy + ch, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(3f, bmp.getWidth() / 200f));
+            paint.setColor(Color.rgb(255, 80, 0));
+            canvas.drawRect(cx, cy, cx + cw, cy + ch, paint);
+            scrollTo = (int) cy;
+        }
+
         imageView.setImageBitmap(bmp);
-        scrollView.scrollTo(0, 0);
+        final int target = scrollTo;
+        // keep the bar in view: a page taller than the screen scrolls to it
+        scrollView.post(() -> scrollView.scrollTo(0, Math.max(0, target - scrollView.getHeight() / 3)));
         pageView.setText("Page " + (page + 1) + " / " + renderer.getPageCount());
     }
 
