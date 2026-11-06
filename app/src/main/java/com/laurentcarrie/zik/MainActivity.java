@@ -59,7 +59,7 @@ public class MainActivity extends Activity {
     private File currentFile;
     private SharedPreferences prefs;
     // Bar slider: highlights bar n of the chord chart, when the song has bar positions
-    private TextView sectionLabel;
+    private TextView sectionLabel, missingClicks;
     private android.widget.FrameLayout sectionRow;
     private BarCells cells;
     private int highlight; // bar number shown, 0 for none
@@ -228,11 +228,21 @@ public class MainActivity extends Activity {
         sectionLabel.setTextSize(18);
         sectionLabel.setTypeface(null, android.graphics.Typeface.BOLD);
         sectionLabel.setSingleLine(true);
+        sectionLabel.setIncludeFontPadding(false);
+        sectionLabel.setPadding(0, 0, 0, 0);
         sectionRow.addView(sectionLabel, new android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT));
         sectionRow.setVisibility(View.GONE);
         rangePanel.addView(sectionRow, 0, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        // thin red notice when the bars are only estimated from the tempo
+        missingClicks = new TextView(this);
+        missingClicks.setTextSize(12);
+        missingClicks.setTextColor(Color.RED);
+        missingClicks.setText("Clics manquants : mesure estimée d'après le tempo");
+        missingClicks.setVisibility(View.GONE);
+        rangePanel.addView(missingClicks, 0, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         rangePanel.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> placeSectionLabel());
 
@@ -555,7 +565,7 @@ public class MainActivity extends Activity {
 
     /** True while the chart follows the recording: bar positions and beat times are there. */
     private boolean following() {
-        return cells != null && clickTimes != null && currentFile != null
+        return cells != null && (clickTimes != null || songTempo > 0) && currentFile != null
                 && "mp3".equals(currentFile.getParentFile().getName());
     }
 
@@ -563,6 +573,7 @@ public class MainActivity extends Activity {
     private void placeSectionLabel() {
         boolean on = following() && highlight >= 1;
         sectionRow.setVisibility(on ? View.VISIBLE : View.GONE);
+        missingClicks.setVisibility(on && clickTimes == null ? View.VISIBLE : View.GONE);
         if (!on || posBar.getWidth() == 0) return;
         sectionLabel.setText(cells.section[highlight - 1]);
         sectionLabel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
@@ -593,9 +604,17 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Bar (1-based) being played at this time of the recording: 4 beats a bar, from the first click. */
+    /** Bar (1-based) being played at this time of the recording: 4 beats a bar, from the first click (or from the tempo when there are no clicks). */
     private int barAt(int ms) {
         double t = ms / 1000.0;
+        if (clickTimes == null) {
+            // no beat times: 4 beats a bar at the song tempo from the start of the file; when that
+            // would run past the end of the file, squeeze the bars to fit the duration
+            double barLen = 240.0 / songTempo;
+            double d = durationMs / 1000.0;
+            if (d > 0 && barLen * cells.count > d) barLen = d / cells.count;
+            return Math.max(1, Math.min(cells.count, (int) (t / barLen) + 1));
+        }
         int lo = 0, hi = clickTimes.length; // number of clicks at or before t
         while (lo < hi) {
             int mid = (lo + hi) >>> 1;
