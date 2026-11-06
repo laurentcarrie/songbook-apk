@@ -36,7 +36,7 @@ public class MainActivity extends Activity {
     private ParcelFileDescriptor pfd;
     private int page = 0;
     private String[] setlistPdfs, setlistTitles, setlistMp3s;
-    private LinearLayout mp3Row;
+    private FlowLayout mp3Row;
     private android.media.MediaPlayer player;
     private Button playing, pauseButton, stopButton, drumButton;
     private DrumMachine drums;
@@ -85,9 +85,9 @@ public class MainActivity extends Activity {
         pageView.setPadding(32, 16, 32, 16);
 
         bar.addView(pageView);
-        mp3Row = new LinearLayout(this);
-        mp3Row.setOrientation(LinearLayout.HORIZONTAL);
-        bar.addView(mp3Row);
+        // The mp3 buttons go in a row of their own, under the bar, and wrap when there are many
+        mp3Row = new FlowLayout(this);
+        mp3Row.setPadding(32, 0, 32, 0);
         drumButton = new Button(this);
         drumButton.setAllCaps(false);
         drumButton.setVisibility(View.GONE);
@@ -212,6 +212,8 @@ public class MainActivity extends Activity {
         rangePanel.addView(loopBox);
 
         root.addView(bar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(mp3Row, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(drumPanel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
