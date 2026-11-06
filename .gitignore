@@ -3,3 +3,8 @@ build/
 local.properties
 *.apk
 .idea/
+
+# release signing: never commit the key or its passwords
+keystore.properties
+*.jks
+*.keystore
