@@ -1,4 +1,10 @@
 plugins { id 'com.android.application' }
+
+// Release signing: the key and its passwords come from keystore.properties (not in git)
+def keystoreProps = new Properties()
+def keystoreFile = rootProject.file('keystore.properties')
+if (keystoreFile.exists()) keystoreFile.withInputStream { keystoreProps.load(it) }
+
 android {
     namespace 'com.laurentcarrie.zik'
     compileSdk 34
@@ -8,6 +14,23 @@ android {
         targetSdk 34
         versionCode 1
         versionName '1.0'
+    }
+    signingConfigs {
+        release {
+            if (keystoreProps['storeFile']) {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            debuggable false
+            minifyEnabled false // SnakeYAML relies on reflection: keep the code as it is
+            signingConfig keystoreProps['storeFile'] ? signingConfigs.release : null
+        }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
