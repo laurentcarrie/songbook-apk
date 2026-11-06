@@ -1,4 +1,4 @@
-package com.example.hello;
+package com.laurentcarrie.zik;
 
 import java.util.List;
 

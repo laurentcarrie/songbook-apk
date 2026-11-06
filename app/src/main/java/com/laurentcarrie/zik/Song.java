@@ -1,4 +1,4 @@
-package com.example.hello;
+package com.laurentcarrie.zik;
 
 import java.util.List;
 
@@ -6,6 +6,10 @@ import java.util.List;
 final class Song {
     final String id, author, title, pdf;
     final List<String> tags;
+    /** Beats per minute, 0 when world.yml does not give it. */
+    int tempo;
+    /** Delivered mp3 files as "name=path" (path relative to the delivery root). */
+    final List<String> mp3 = new java.util.ArrayList<>();
 
     Song(String id, String author, String title, String pdf, List<String> tags) {
         this.id = id;

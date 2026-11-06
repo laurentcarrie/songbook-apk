@@ -1,9 +1,9 @@
 plugins { id 'com.android.application' }
 android {
-    namespace 'com.example.hello'
+    namespace 'com.laurentcarrie.zik'
     compileSdk 34
     defaultConfig {
-        applicationId 'com.example.hello'
+        applicationId 'com.laurentcarrie.zik'
         minSdk 24
         targetSdk 34
         versionCode 1
