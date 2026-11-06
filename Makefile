@@ -1,19 +1,21 @@
 APK := app/build/outputs/apk/debug/app-debug.apk
-PKG := com.example.hello
+PKG := com.laurentcarrie.zik
 
-.PHONY: build deploy run clean
+.DEFAULT_GOAL := help
+.PHONY: help build deploy run clean
 
-build:
+help: ## show this help
+	@grep -hE '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
+
+build: ## build the debug apk
 	./gradlew assembleDebug -q
 
-deploy: build
+deploy: build ## build and install the apk on the connected device (adb)
 	adb wait-for-device
 	adb install -r $(APK)
 
-run: deploy
-	adb shell am force-stop $(PKG)
-	adb shell am force-stop com.google.android.documentsui
+run: deploy ## deploy and launch the app
 	adb shell monkey -p $(PKG) -c android.intent.category.LAUNCHER 1
 
-clean:
+clean: ## clean the build
 	./gradlew clean -q

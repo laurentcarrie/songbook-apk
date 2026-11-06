@@ -1,4 +1,4 @@
-package com.example.hello;
+package com.laurentcarrie.zik;
 
 import org.yaml.snakeyaml.Yaml;
 
@@ -29,18 +29,33 @@ final class World {
                     if (m.get("tags") instanceof List) {
                         for (Object t : (List<?>) m.get("tags")) tags.add(str(t));
                     }
-                    songs.add(new Song(str(m.get("id")), str(m.get("author")),
-                            str(m.get("title")), str(m.get("pdf")), tags));
+                    Song song = new Song(str(m.get("id")), str(m.get("author")),
+                            str(m.get("title")), str(m.get("pdf")), tags);
+                    if (m.get("tempo") instanceof Number) song.tempo = ((Number) m.get("tempo")).intValue();
+                    if (m.get("mp3") instanceof List) {
+                        for (Object e : (List<?>) m.get("mp3")) {
+                            Map<?, ?> em = (Map<?, ?>) e;
+                            song.mp3.add(str(em.get("name")) + "=" + str(em.get("path")));
+                        }
+                    }
+                    songs.add(song);
                 }
             }
         }
+        sort(songs, true);
+        return songs;
+    }
+
+    /** Sorts by author then title, or by title then author (case and accent insensitive). */
+    static void sort(List<Song> songs, boolean authorFirst) {
         Collator collator = Collator.getInstance(Locale.FRENCH);
         collator.setStrength(Collator.PRIMARY);
         Collections.sort(songs, (a, b) -> {
-            int c = collator.compare(a.author, b.author);
-            return c != 0 ? c : collator.compare(a.title, b.title);
+            String a1 = authorFirst ? a.author : a.title, b1 = authorFirst ? b.author : b.title;
+            String a2 = authorFirst ? a.title : a.author, b2 = authorFirst ? b.title : b.author;
+            int c = collator.compare(a1, b1);
+            return c != 0 ? c : collator.compare(a2, b2);
         });
-        return songs;
     }
 
     /** Books (setlists) sorted by name. */
