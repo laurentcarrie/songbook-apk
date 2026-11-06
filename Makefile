@@ -1,4 +1,13 @@
+# The tablet has the release-signed app, which a debug build cannot replace:
+# deploy the release apk when there is a signing key, the debug one otherwise.
+HAS_KEY := $(wildcard keystore.properties)
+ifdef HAS_KEY
+APK := app/build/outputs/apk/release/app-release.apk
+BUILD := release
+else
 APK := app/build/outputs/apk/debug/app-debug.apk
+BUILD := build
+endif
 PKG := com.laurentcarrie.zik
 
 .DEFAULT_GOAL := help
@@ -15,7 +24,7 @@ release: ## build the signed release apk (needs keystore.properties)
 	./gradlew assembleRelease -q
 	@ls -l app/build/outputs/apk/release/app-release.apk
 
-deploy: build ## build and install the apk on the connected device (adb)
+deploy: $(BUILD) ## build and install the apk (release if keystore.properties exists) on the connected device (adb)
 	adb wait-for-device
 	adb install -r $(APK)
 
