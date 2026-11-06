@@ -13,12 +13,14 @@ import java.util.Random;
 /** Drum loop synthesised on the device (rock, funk, shuffle), played in a gapless loop. */
 final class DrumMachine {
     static final String[] STYLES = {"rock", "funk", "shuffle"};
-    private static final int RATE = 44100, BARS = 4;
+    private static final int RATE = 44100;
+    static final int BARS = 4;
     private static final int KICK = 0, SNARE = 1, HAT = 2, OPEN = 3, TOM_HI = 4, TOM_MID = 5, TOM_LO = 6, CRASH = 7;
 
     private final short[][] samples = new short[8][];
     private final Handler main = new Handler(Looper.getMainLooper());
     private AudioTrack track;
+    private volatile int loopFrames, framesPerBeat;
     private boolean playing;
     private int generation; // bumped on each start / stop, so a stale background render is dropped
 
@@ -111,12 +113,28 @@ final class DrumMachine {
                         .setBufferSizeInBytes(pcm.length * 2)
                         .setTransferMode(AudioTrack.MODE_STATIC)
                         .build();
+                loopFrames = pcm.length;
+                framesPerBeat = pcm.length / (BARS * 4);
                 t.write(pcm, 0, pcm.length);
                 t.setLoopPoints(0, pcm.length, -1);
                 t.play();
                 track = t;
             });
         }).start();
+    }
+
+    /** Where the loop is now: {bar (0-3), beat (0-3)}, or null when nothing is playing. */
+    int[] position() {
+        AudioTrack t = track;
+        int total = loopFrames, fpb = framesPerBeat;
+        if (!playing || t == null || total <= 0 || fpb <= 0) return null;
+        try {
+            long pos = (t.getPlaybackHeadPosition() & 0xFFFFFFFFL) % total;
+            int beatIndex = (int) Math.min(pos / fpb, BARS * 4 - 1);
+            return new int[]{beatIndex / 4, beatIndex % 4};
+        } catch (IllegalStateException e) {
+            return null;
+        }
     }
 
     void stop() {

@@ -46,6 +46,7 @@ public class MainActivity extends Activity {
     private LinearLayout drumPanel;
     private Button resetButton;
     private TextView drumBpmLabel;
+    private BeatIndicator beatView;
     private boolean paused;
     // Range of the file to play: sliders for the position, the start and the end
     private LinearLayout rangePanel;
@@ -213,6 +214,10 @@ public class MainActivity extends Activity {
 
         root.addView(bar, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        beatView = new BeatIndicator(this, 90);
+        beatView.setVisibility(View.GONE);
+        root.addView(beatView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(mp3Row, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(drumPanel, new LinearLayout.LayoutParams(
@@ -301,6 +306,7 @@ public class MainActivity extends Activity {
         drumButton.setVisibility(songTempo > 0 || on ? View.VISIBLE : View.GONE);
         drumButton.setText((on ? "■ 🥁 " : "🥁 ") + (on ? drumBpm : songTempo));
         drumPanel.setVisibility(on ? View.VISIBLE : View.GONE);
+        beatView.setVisibility(on ? View.VISIBLE : View.GONE);
         drumBpmLabel.setText("Tempo " + drumBpm + " BPM");
         resetButton.setText(songTempo > 0 ? "↺ " + songTempo : "↺");
     }

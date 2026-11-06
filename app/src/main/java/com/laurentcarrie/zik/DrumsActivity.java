@@ -89,6 +89,12 @@ public class DrumsActivity extends Activity {
         });
         layout.addView(group);
 
+        BeatIndicator beats = new BeatIndicator(this, 180);
+        LinearLayout.LayoutParams belp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        belp.setMargins(0, 48, 0, 0);
+        layout.addView(beats, belp);
+
         playButton = new Button(this);
         playButton.setTextSize(30);
         playButton.setAllCaps(false);
