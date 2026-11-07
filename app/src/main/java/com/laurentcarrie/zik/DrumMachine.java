@@ -226,6 +226,8 @@ final class DrumMachine {
         int barFrames = (int) Math.round(4 * 60.0 / bpm * RATE);
         int total = barFrames * bars;
         float[] mix = new float[total];
+        long t0 = System.nanoTime();
+        java.util.Map<String, float[]> notesCache = new java.util.HashMap<>(); // the same notes come back bar after bar
         for (int bar = 0; bar < bars; bar++) {
             boolean last = bar % 4 == 3 || bar == bars - 1;
             List<int[]> notes = pattern(style, last);
@@ -240,8 +242,9 @@ final class DrumMachine {
                     mix[j] += smp[i] * gain;
                 }
             }
-            if (chords != null) addChords(mix, bar * barFrames, barFrames, chords[bar]);
+            if (chords != null) addChords(mix, bar * barFrames, barFrames, chords[bar], notesCache);
         }
+        android.util.Log.i("DrumMachine", "rendered " + bars + " bars in " + (System.nanoTime() - t0) / 1000000 + " ms");
         short[] out = new short[total];
         for (int i = 0; i < total; i++) {
             float v = mix[i] * 0.6f;
@@ -308,7 +311,7 @@ final class DrumMachine {
     }
 
     /** The chords of one bar (space separated), each in an equal part of the bar, strummed at its start. */
-    private static void addChords(float[] mix, int barStart, int barFrames, String spec) {
+    private static void addChords(float[] mix, int barStart, int barFrames, String spec, java.util.Map<String, float[]> cache) {
         String[] tokens = spec.trim().isEmpty() ? new String[0] : spec.trim().split("\\s+");
         if (tokens.length == 0) return;
         int seg = barFrames / tokens.length;
@@ -317,32 +320,39 @@ final class DrumMachine {
             if (notes == null) continue;
             int at = barStart + k * seg;
             int hold = (int) (seg * 0.92);
-            addNote(mix, at, hold, notes[0], 7000f, 0.45f); // bass
+            addNote(mix, at, hold, notes[0], 7000f, 0.45f, cache); // bass
             for (int i = 1; i < notes.length; i++) {
-                addNote(mix, at + i * (RATE / 90), hold, notes[i], 3800f, 0.8f); // strummed upwards, about 11 ms apart
+                addNote(mix, at + i * (RATE / 90), hold, notes[i], 3800f, 0.8f, cache); // strummed upwards, about 11 ms apart
             }
             if (tokens.length == 1) { // a whole bar on one chord: a lighter strike on the third beat
                 int again = at + barFrames / 2;
                 for (int i = 1; i < notes.length; i++) {
-                    addNote(mix, again + i * (RATE / 90), barFrames / 2 - RATE / 100, notes[i], 2200f, 0.5f);
+                    addNote(mix, again + i * (RATE / 90), barFrames / 2 - RATE / 100, notes[i], 2200f, 0.5f, cache);
                 }
             }
         }
     }
 
-    /** A plucked note: a few harmonics with an exponential decay (tau seconds) and a short fade at the end of the hold. */
-    private static void addNote(float[] mix, int at, int hold, int midi, float amp, float tau) {
-        double f = 440.0 * Math.pow(2, (midi - 69) / 12.0);
-        int total = mix.length;
-        int fade = Math.min(hold / 4, RATE / 25);
-        double w = 2 * Math.PI * f / RATE;
-        for (int i = 0; i < hold; i++) {
-            double t = (double) i / RATE;
-            double v = Math.sin(w * i) + 0.45 * Math.sin(2 * w * i) + 0.2 * Math.sin(3 * w * i);
-            double env = Math.exp(-t / tau) * Math.min(1.0, i / (RATE * 0.004));
-            if (i > hold - fade) env *= (double) (hold - i) / fade;
-            mix[(at + i) % total] += (float) (v * env * amp);
+    /** A plucked note: a few harmonics with an exponential decay (tau seconds) and a short fade at the end of the hold. Each distinct note is synthesised once. */
+    private static void addNote(float[] mix, int at, int hold, int midi, float amp, float tau, java.util.Map<String, float[]> cache) {
+        String key = midi + ":" + hold + ":" + amp + ":" + tau;
+        float[] wave = cache.get(key);
+        if (wave == null) {
+            wave = new float[hold];
+            double f = 440.0 * Math.pow(2, (midi - 69) / 12.0);
+            int fade = Math.min(hold / 4, RATE / 25);
+            double w = 2 * Math.PI * f / RATE;
+            for (int i = 0; i < hold; i++) {
+                double t = (double) i / RATE;
+                double v = Math.sin(w * i) + 0.45 * Math.sin(2 * w * i) + 0.2 * Math.sin(3 * w * i);
+                double env = Math.exp(-t / tau) * Math.min(1.0, i / (RATE * 0.004));
+                if (i > hold - fade) env *= (double) (hold - i) / fade;
+                wave[i] = (float) (v * env * amp);
+            }
+            cache.put(key, wave);
         }
+        int total = mix.length;
+        for (int i = 0; i < wave.length; i++) mix[(at + i) % total] += wave[i];
     }
 
     // ---- drum sounds, synthesised ----
