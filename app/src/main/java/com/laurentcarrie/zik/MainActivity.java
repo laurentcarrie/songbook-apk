@@ -45,7 +45,18 @@ public class MainActivity extends Activity {
     private int[] setlistTempos;
     /** Tempo of the current song (0 if unknown), and the tempo the loop is set to. */
     private int songTempo, drumBpm;
-    private LinearLayout drumPanel;
+    private LinearLayout drumPanel, drumBarPanel;
+    private TextView drumBarLabel;
+    private android.widget.EditText drumBarEdit;
+    private boolean drumPaused, settingBarText; // paused to type a bar number; true while the field is set by the code
+    private int drumFirstBar = 1; // bar the drum track starts on
+    private long drumOffset, drumPrev = -1; // bar = (drumOffset + bars played) mod bar count; drumPrev -1: re-anchor
+    private final Runnable drumTicker = new Runnable() {
+        @Override public void run() {
+            drumTick();
+            handler.postDelayed(this, 100);
+        }
+    };
     private Button resetButton;
     private TextView drumBpmLabel;
     private BeatIndicator beatView;
@@ -54,7 +65,8 @@ public class MainActivity extends Activity {
     private LinearLayout rangePanel;
     private SeekBar posBar, startBar, endBar;
     private TextView posLabel, startLabel, endLabel;
-    private android.widget.CheckBox loopBox;
+    private TextView loopBox;
+    private boolean loopOn;
     private int startMs, endMs, durationMs, minGapMs = 2000;
     private File currentFile;
     private SharedPreferences prefs;
@@ -180,6 +192,44 @@ public class MainActivity extends Activity {
         drumPanel.addView(reset);
         resetButton = reset;
 
+        // first bar of the drum track, when the song has a structure
+        drumBarPanel = new LinearLayout(this);
+        drumBarPanel.setOrientation(LinearLayout.HORIZONTAL);
+        drumBarPanel.setGravity(Gravity.CENTER_VERTICAL);
+        drumBarPanel.setPadding(32, 0, 32, 8);
+        drumBarPanel.setVisibility(View.GONE);
+        drumBarLabel = new TextView(this);
+        drumBarLabel.setTextSize(20);
+        drumBarLabel.setText("Mesure  #");
+        drumBarPanel.addView(drumBarLabel);
+        drumBarEdit = new android.widget.EditText(this);
+        drumBarEdit.setTextSize(20);
+        drumBarEdit.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        drumBarEdit.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+        drumBarEdit.setSelectAllOnFocus(true);
+        drumBarEdit.setMinWidth(160);
+        drumBarEdit.setFocusableInTouchMode(false); // while playing a tap only pauses
+        drumBarEdit.setOnClickListener(v -> pauseDrumsForEdit());
+        drumBarEdit.setOnEditorActionListener((v, action, ev) -> {
+            ((android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
+                    .hideSoftInputFromWindow(v.getWindowToken(), 0);
+            return true;
+        });
+        drumBarEdit.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
+            @Override public void onTextChanged(CharSequence c, int a, int b, int d) { }
+            @Override public void afterTextChanged(android.text.Editable e) {
+                if (settingBarText || !drumPaused || cells == null) return;
+                try {
+                    int n = Integer.parseInt(e.toString().trim());
+                    if (n < 1 || n > cells.count) return;
+                    drumFirstBar = n;
+                    selectBar(n); // the circle moves to the bar typed
+                } catch (NumberFormatException ignored) { }
+            }
+        });
+        drumBarPanel.addView(drumBarEdit);
+
         rangePanel = new LinearLayout(this);
         rangePanel.setOrientation(LinearLayout.VERTICAL);
         rangePanel.setPadding(32, 0, 32, 8);
@@ -193,7 +243,7 @@ public class MainActivity extends Activity {
         posBar.setOnSeekBarChangeListener(new SimpleSeek() {
             @Override void changed(int v) {
                 if (player != null) player.seekTo(v);
-                posLabel.setText("Position  " + time(v));
+                posLabel.setText("Position  " + barTime(v));
                 followBar(v);
             }
         });
@@ -201,7 +251,7 @@ public class MainActivity extends Activity {
             @Override void changed(int v) {
                 startMs = Math.min(v, Math.max(0, endMs - minGapMs));
                 if (startMs != v) startBar.setProgress(startMs);
-                startLabel.setText("Début  " + time(startMs));
+                startLabel.setText("Début  " + barTime(startMs));
                 saveRange();
                 if (player != null && player.getCurrentPosition() < startMs) player.seekTo(startMs);
             }
@@ -210,17 +260,58 @@ public class MainActivity extends Activity {
             @Override void changed(int v) {
                 endMs = Math.max(v, Math.min(durationMs, startMs + minGapMs));
                 if (endMs != v) endBar.setProgress(endMs);
-                endLabel.setText("Fin  " + time(endMs));
+                endLabel.setText("Fin  " + barTime(endMs));
                 saveRange();
             }
         });
 
-        loopBox = new android.widget.CheckBox(this);
-        loopBox.setText("Boucle (repart du début à la fin)");
-        loopBox.setTextSize(18);
-        loopBox.setChecked(prefs.getBoolean("loop", false));
-        loopBox.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean("loop", on).apply());
-        rangePanel.addView(loopBox);
+        loopBox = new TextView(this) {
+            @Override protected void onDraw(android.graphics.Canvas c) {
+                // the loop icon is drawn here, centred on the view: a circular arrow, plus an oblique bar when off
+                android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+                p.setColor(getCurrentTextColor());
+                p.setStyle(android.graphics.Paint.Style.STROKE);
+                p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+                float s = getTextSize();
+                float cx = getWidth() / 2f, cy = getHeight() / 2f, r = s * 0.36f;
+                p.setStrokeWidth(s / 9f);
+                // arc from -50 to 230 degrees (clockwise), open at the top
+                c.drawArc(new android.graphics.RectF(cx - r, cy - r, cx + r, cy + r), -50, 280, false, p);
+                // arrow head at the end of the arc, pointing along the clockwise tangent
+                double a = Math.toRadians(230);
+                float ex = cx + r * (float) Math.cos(a), ey = cy + r * (float) Math.sin(a);
+                float tx = -(float) Math.sin(a), ty = (float) Math.cos(a); // tangent
+                float nx = -ty, ny = tx;                                     // normal
+                float h = s * 0.22f, w = s * 0.16f;
+                android.graphics.Path head = new android.graphics.Path();
+                head.moveTo(ex + tx * h, ey + ty * h);
+                head.lineTo(ex + nx * w, ey + ny * w);
+                head.lineTo(ex - nx * w, ey - ny * w);
+                head.close();
+                p.setStyle(android.graphics.Paint.Style.FILL);
+                c.drawPath(head, p);
+                if (!loopOn) { // off: oblique bar through the centre of the circle
+                    p.setStyle(android.graphics.Paint.Style.STROKE);
+                    p.setStrokeWidth(s / 18f);
+                    float k = r * 1.25f;
+                    c.drawLine(cx - k, cy + k, cx + k, cy - k, p);
+                }
+            }
+        };
+        loopBox.setText(" "); // the text only gives the view its size
+        loopBox.setTextSize(36);
+        loopBox.setMinWidth((int) (72 * getResources().getDisplayMetrics().scaledDensity));
+        loopBox.setGravity(android.view.Gravity.CENTER);
+        loopBox.setPadding(24, 8, 24, 8);
+        loopOn = prefs.getBoolean("loop", false);
+        paintLoop();
+        loopBox.setOnClickListener(v -> {
+            loopOn = !loopOn;
+            prefs.edit().putBoolean("loop", loopOn).apply();
+            paintLoop();
+        });
+        loopBox.setVisibility(View.GONE);
+        bar.addView(loopBox, bar.indexOfChild(stopButton) + 1);
 
         // the name of the section being played rides above the thumb of the position slider
         sectionRow = new android.widget.FrameLayout(this);
@@ -255,6 +346,8 @@ public class MainActivity extends Activity {
         root.addView(mp3Row, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(drumPanel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(drumBarPanel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(rangePanel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -329,18 +422,69 @@ public class MainActivity extends Activity {
     private void toggleDrums() {
         if (drums.isPlaying()) {
             drums.stop();
+            drumPaused = false;
+            drumFirstBar = 1; // the next start is from the top
         } else {
+            drumPrev = -1; // the first tick anchors the bar count on drumFirstBar
             drums.start(drumBpm, 0); // style 0: rock
         }
         updateDrumUi();
     }
 
+    /** Drum track: the chart follows its bars, counted from the first bar chosen with the slider. */
+    /** Tap on the bar number: the drums pause and the number can be typed; the drum button resumes from it. */
+    private void pauseDrumsForEdit() {
+        if (!drums.isPlaying()) return;
+        drumFirstBar = highlight >= 1 ? highlight : drumFirstBar;
+        drums.stop();
+        drumPaused = true;
+        updateDrumUi();
+        drumBarEdit.setFocusableInTouchMode(true);
+        drumBarEdit.requestFocus();
+        drumBarEdit.selectAll();
+        ((android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
+                .showSoftInput(drumBarEdit, 0);
+    }
+
+    private void setBarText(int n) {
+        settingBarText = true;
+        drumBarEdit.setText(String.valueOf(n));
+        settingBarText = false;
+    }
+
+    private void drumTick() {
+        if (!drums.isPlaying() || cells == null) return;
+        long b = drums.barsPlayed();
+        if (b < 0) { drumPrev = -1; return; }
+        if (drumPrev < 0) drumOffset = drumFirstBar - 1 - b;
+        drumPrev = b;
+        int bar = (int) Math.floorMod(drumOffset + b, (long) cells.count) + 1;
+        if (bar != highlight) { selectBar(bar); setBarText(bar); }
+    }
+
     private void updateDrumUi() {
         boolean on = drums.isPlaying();
-        drumButton.setVisibility(songTempo > 0 || on ? View.VISIBLE : View.GONE);
+        if (on) drumPaused = false;
+        boolean shown = on || drumPaused; // paused to edit the bar: the panels stay
+        drumButton.setVisibility(songTempo > 0 || shown ? View.VISIBLE : View.GONE);
         drumButton.setText((on ? "■ 🥁 " : "🥁 ") + (on ? drumBpm : songTempo));
-        drumPanel.setVisibility(on ? View.VISIBLE : View.GONE);
+        drumPanel.setVisibility(shown ? View.VISIBLE : View.GONE);
         beatView.setVisibility(on ? View.VISIBLE : View.GONE);
+        mp3Row.setVisibility(shown || player != null ? View.GONE : View.VISIBLE); // no list while something plays
+        boolean bars = shown && cells != null && cells.count > 1;
+        if (!shown) drumBarEdit.setFocusableInTouchMode(false);
+        if (on) drumBarEdit.setFocusableInTouchMode(false);
+        drumBarPanel.setVisibility(bars ? View.VISIBLE : View.GONE);
+        handler.removeCallbacks(drumTicker);
+        if (on) {
+            handler.post(drumTicker);
+        } else {
+            drumPrev = -1;
+            if (!drumPaused && player == null && highlight != 0) { // nothing plays: no bar marked
+                highlight = 0;
+                if (renderer != null) showPage();
+            }
+        }
         drumBpmLabel.setText("Tempo " + drumBpm + " BPM");
         resetButton.setText(songTempo > 0 ? "↺ " + songTempo : "↺");
     }
@@ -375,7 +519,7 @@ public class MainActivity extends Activity {
             player = new android.media.MediaPlayer();
             player.setDataSource(f.getPath());
             player.setOnCompletionListener(mp -> {
-                if (loopBox.isChecked() && currentFile != null) {
+                if (loopOn && currentFile != null) {
                     mp.seekTo(startMs); // the range ends with the file: start over
                     mp.start();
                 } else {
@@ -472,16 +616,16 @@ public class MainActivity extends Activity {
         startBar.setProgress(startMs);
         endBar.setProgress(endMs);
         posBar.setProgress(startMs);
-        startLabel.setText("Début  " + time(startMs));
-        endLabel.setText("Fin  " + time(endMs));
-        posLabel.setText("Position  " + time(startMs));
+        startLabel.setText("Début  " + barTime(startMs));
+        endLabel.setText("Fin  " + barTime(endMs));
+        posLabel.setText("Position  " + barTime(startMs));
     }
 
     /** Follows the playback: moves the position slider, and pauses at the end of the range. */
     private void tick() {
         if (player == null || paused) return;
         int pos = player.getCurrentPosition();
-        if (pos >= endMs && loopBox.isChecked()) {
+        if (pos >= endMs && loopOn) {
             player.seekTo(startMs);
             pos = startMs;
         } else if (pos >= endMs) {
@@ -492,7 +636,7 @@ public class MainActivity extends Activity {
             updateControls();
         }
         posBar.setProgress(pos);
-        posLabel.setText("Position  " + time(pos));
+        posLabel.setText("Position  " + barTime(pos));
         followBar(pos);
     }
 
@@ -514,7 +658,9 @@ public class MainActivity extends Activity {
         boolean loaded = player != null;
         pauseButton.setVisibility(loaded ? View.VISIBLE : View.GONE);
         stopButton.setVisibility(loaded ? View.VISIBLE : View.GONE);
+        loopBox.setVisibility(loaded ? View.VISIBLE : View.GONE);
         rangePanel.setVisibility(loaded ? View.VISIBLE : View.GONE);
+        mp3Row.setVisibility(loaded || drums.isPlaying() ? View.GONE : View.VISIBLE); // the list comes back on stop
         pauseButton.setText(paused ? "▶" : "⏸");
     }
 
@@ -528,6 +674,10 @@ public class MainActivity extends Activity {
         currentFile = null;
         handler.removeCallbacks(ticker);
         updateControls();
+        if (highlight != 0) { // nothing playing: no bar marked
+            highlight = 0;
+            if (renderer != null) showPage();
+        }
     }
 
     private void openPdf(File file) {
@@ -544,13 +694,18 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Loads the bar positions and beat times of the song; the chart starts on bar 1. */
+    /** Loads the bar positions and beat times of the song; the chart shows bar 1's page, with no bar marked until a recording plays. */
     private void loadCells(File pdf) {
         cells = BarCells.load(pdf);
         clickTimes = loadClicks(pdf);
         highlight = 0;
+        if (cells != null) {
+            drumFirstBar = Math.max(1, Math.min(drumFirstBar, cells.count));
+            setBarText(drumFirstBar);
+        }
+        drumPrev = -1;
+        updateDrumUi();
         if (cells == null) return;
-        highlight = 1;
         if (cells.page[0] > 0) page = Math.min(cells.page[0] - 1, renderer.getPageCount() - 1);
     }
 
@@ -604,6 +759,17 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** The loop icon is green when the loop is on, grey when it is off. */
+    private void paintLoop() {
+        loopBox.setTextColor(loopOn ? 0xFF2E9E4F : 0xFF9E9E9E);
+        loopBox.invalidate();
+    }
+
+    /** "#i  m:ss" (bar number then time) when the bars can be followed, else just the time. */
+    private String barTime(int ms) {
+        return following() ? "#" + barAt(ms) + "  " + time(ms) : time(ms);
+    }
+
     /** Bar (1-based) being played at this time of the recording: 4 beats a bar, from the first click (or from the tempo when there are no clicks). */
     private int barAt(int ms) {
         double t = ms / 1000.0;
@@ -646,7 +812,7 @@ public class MainActivity extends Activity {
         p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
         p.close();
 
-        // the highlighted bar, when it is on this page
+        // the active bar, circled, when it is on this page
         int scrollTo = 0;
         if (cells != null && highlight >= 1 && cells.page[highlight - 1] == page + 1) {
             float k = bmp.getWidth() / cells.pageW;
@@ -654,14 +820,24 @@ public class MainActivity extends Activity {
             float cw = cells.w[highlight - 1] * k, ch = cells.h[highlight - 1] * k;
             Canvas canvas = new Canvas(bmp);
             Paint paint = new Paint();
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.argb(90, 255, 214, 0));
-            canvas.drawRect(cx, cy, cx + cw, cy + ch, paint);
+            // circle the bar: an ellipse a little larger than the cell, so its corners stay inside
+            float mx = cx + cw / 2, my = cy + ch / 2, rx = cw / 2 * 1.3f, ry = ch / 2 * 1.3f;
+            paint.setAntiAlias(true);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(Math.max(3f, bmp.getWidth() / 200f));
             paint.setColor(Color.rgb(255, 80, 0));
-            canvas.drawRect(cx, cy, cx + cw, cy + ch, paint);
+            canvas.drawOval(new android.graphics.RectF(mx - rx, my - ry, mx + rx, my + ry), paint);
             scrollTo = (int) cy;
+        }
+        // the dot of the pass being played, in a repeat: filled over the black one
+        if (cells != null && highlight >= 1 && cells.dotPage[highlight - 1] == page + 1) {
+            float k = bmp.getWidth() / cells.pageW;
+            float r = cells.dotR[highlight - 1] * k;
+            Canvas canvas = new Canvas(bmp);
+            Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.rgb(255, 80, 0));
+            canvas.drawCircle(cells.dotX[highlight - 1] * k, cells.dotY[highlight - 1] * k, r * 1.5f, paint);
         }
 
         imageView.setImageBitmap(bmp);

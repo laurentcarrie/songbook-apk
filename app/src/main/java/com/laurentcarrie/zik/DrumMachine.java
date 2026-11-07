@@ -95,6 +95,8 @@ final class DrumMachine {
         this.bpm = bpm;
         this.style = style;
         stopTrack();
+        loops = 0;
+        lastPos = 0;
         playing = true;
         final int gen = ++generation;
         new Thread(() -> {
@@ -134,6 +136,23 @@ final class DrumMachine {
             return new int[]{beatIndex / 4, beatIndex % 4};
         } catch (IllegalStateException e) {
             return null;
+        }
+    }
+
+    private long loops, lastPos;
+
+    /** Bars played since the loop started (counting through the loops), or -1 when nothing is playing. Call it often enough to see each wrap of the loop. */
+    long barsPlayed() {
+        AudioTrack t = track;
+        int total = loopFrames, fpb = framesPerBeat;
+        if (!playing || t == null || total <= 0 || fpb <= 0) return -1;
+        try {
+            long pos = (t.getPlaybackHeadPosition() & 0xFFFFFFFFL) % total;
+            if (pos < lastPos) loops++;
+            lastPos = pos;
+            return (loops * total + pos) / ((long) fpb * 4);
+        } catch (IllegalStateException e) {
+            return -1;
         }
     }
 

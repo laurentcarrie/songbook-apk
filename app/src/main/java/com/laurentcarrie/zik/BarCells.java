@@ -20,6 +20,9 @@ final class BarCells {
     /** Per bar (index bar-1): 1-based page, or 0 when the bar has no position. */
     final int[] page;
     final float[] x, y, w, h;
+    /** Per bar: the dot of its pass of a repeat marker (page of the dot, centre, radius), page 0 when the bar is not in a repeat. */
+    final int[] dotPage;
+    final float[] dotX, dotY, dotR;
     /** Per bar: the title of its section ("" when unknown). */
     final String[] section;
 
@@ -32,6 +35,10 @@ final class BarCells {
         y = new float[count];
         w = new float[count];
         h = new float[count];
+        dotPage = new int[count];
+        dotX = new float[count];
+        dotY = new float[count];
+        dotR = new float[count];
         section = new String[count];
         java.util.Arrays.fill(section, "");
     }
@@ -63,6 +70,19 @@ final class BarCells {
                 c.w[i] = num(e.get("w")).floatValue();
                 c.h[i] = num(e.get("h")).floatValue();
                 if (e.get("section") != null) c.section[i] = String.valueOf(e.get("section"));
+            }
+            Object dots = m.get("dots"); // absent in files written by older builds
+            if (dots instanceof List) {
+                for (Object o : (List<?>) dots) {
+                    Map<?, ?> e = (Map<?, ?>) o;
+                    int first = num(e.get("first")).intValue(), last = Math.min(num(e.get("last")).intValue(), max);
+                    for (int b = Math.max(1, first); b <= last; b++) {
+                        c.dotPage[b - 1] = num(e.get("page")).intValue();
+                        c.dotX[b - 1] = num(e.get("x")).floatValue();
+                        c.dotY[b - 1] = num(e.get("y")).floatValue();
+                        c.dotR[b - 1] = num(e.get("r")).floatValue();
+                    }
+                }
             }
             return c;
         } catch (Exception e) {
