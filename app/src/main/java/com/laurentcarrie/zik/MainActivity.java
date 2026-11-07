@@ -50,7 +50,6 @@ public class MainActivity extends Activity {
     private android.widget.EditText drumBarEdit;
     private boolean drumPaused, settingBarText; // paused to type a bar number; true while the field is set by the code
     private int drumFirstBar = 1; // bar the drum track starts on
-    private long drumOffset, drumPrev = -1; // bar = (drumOffset + bars played) mod bar count; drumPrev -1: re-anchor
     private final Runnable drumTicker = new Runnable() {
         @Override public void run() {
             drumTick();
@@ -395,7 +394,7 @@ public class MainActivity extends Activity {
         songTempo = tempo;
         if (drums.isPlaying()) {
             drumBpm = tempo > 0 ? tempo : drums.getBpm();
-            if (drumBpm != drums.getBpm()) drums.start(drumBpm, drums.getStyle());
+            if (drumBpm != drums.getBpm()) startDrums(drums.getStyle(), currentDrumBar());
         } else {
             drumBpm = tempo;
         }
@@ -415,8 +414,19 @@ public class MainActivity extends Activity {
 
     private void setDrumBpm(int bpm) {
         drumBpm = Math.max(40, Math.min(220, bpm));
-        if (drums.isPlaying()) drums.start(drumBpm, drums.getStyle());
+        if (drums.isPlaying()) startDrums(drums.getStyle(), currentDrumBar());
         updateDrumUi();
+    }
+
+    /** Starts the drums at drumBpm; with the bars of the song, the whole song plays, with its chords, from bar index startBar. */
+    private void startDrums(int style, int startBar) {
+        boolean song = cells != null && cells.count > 1;
+        drums.start(drumBpm, style, song ? cells.chords : null, song ? startBar : 0);
+    }
+
+    /** Index (0-based) of the bar the drums are on, for a restart at another tempo. */
+    private int currentDrumBar() {
+        return highlight >= 1 ? highlight - 1 : drumFirstBar - 1;
     }
 
     private void toggleDrums() {
@@ -425,8 +435,7 @@ public class MainActivity extends Activity {
             drumPaused = false;
             drumFirstBar = 1; // the next start is from the top
         } else {
-            drumPrev = -1; // the first tick anchors the bar count on drumFirstBar
-            drums.start(drumBpm, 0); // style 0: rock
+            startDrums(0, drumFirstBar - 1); // style 0: rock
         }
         updateDrumUi();
     }
@@ -453,12 +462,10 @@ public class MainActivity extends Activity {
     }
 
     private void drumTick() {
-        if (!drums.isPlaying() || cells == null) return;
-        long b = drums.barsPlayed();
-        if (b < 0) { drumPrev = -1; return; }
-        if (drumPrev < 0) drumOffset = drumFirstBar - 1 - b;
-        drumPrev = b;
-        int bar = (int) Math.floorMod(drumOffset + b, (long) cells.count) + 1;
+        if (!drums.isPlaying() || cells == null || drums.getLoopBars() != cells.count) return;
+        int[] pos = drums.position(); // {bar, beat} of the song
+        if (pos == null) return;
+        int bar = pos[0] + 1;
         if (bar != highlight) { selectBar(bar); setBarText(bar); }
     }
 
@@ -479,7 +486,6 @@ public class MainActivity extends Activity {
         if (on) {
             handler.post(drumTicker);
         } else {
-            drumPrev = -1;
             if (!drumPaused && player == null && highlight != 0) { // nothing plays: no bar marked
                 highlight = 0;
                 if (renderer != null) showPage();
@@ -703,8 +709,9 @@ public class MainActivity extends Activity {
             drumFirstBar = Math.max(1, Math.min(drumFirstBar, cells.count));
             setBarText(drumFirstBar);
         }
-        drumPrev = -1;
         updateDrumUi();
+        // a drum loop going on from the previous song: play this one's chords from its first bar
+        if (drums.isPlaying() && cells != null && cells.count > 1) startDrums(drums.getStyle(), 0);
         if (cells == null) return;
         if (cells.page[0] > 0) page = Math.min(cells.page[0] - 1, renderer.getPageCount() - 1);
     }

@@ -20,7 +20,7 @@ final class DrumMachine {
     private final short[][] samples = new short[8][];
     private final Handler main = new Handler(Looper.getMainLooper());
     private AudioTrack track;
-    private volatile int loopFrames, framesPerBeat;
+    private volatile int loopFrames, framesPerBeat, loopBars = BARS;
     private boolean playing;
     private int generation; // bumped on each start / stop, so a stale background render is dropped
 
@@ -42,6 +42,8 @@ final class DrumMachine {
     /** Tempo and style of the loop being played, or of the last one played. */
     int getBpm() { return bpm; }
     int getStyle() { return style; }
+    /** Bars of the loop being played: BARS, or the number of bars of the song when it plays the chords. */
+    int getLoopBars() { return loopBars; }
 
     /** Level of each recorded sample, so that the kit is balanced (the files are peak-normalised). */
     private static final float[] LEVEL = {1.0f, 0.9f, 0.55f, 0.5f, 0.9f, 0.9f, 0.9f, 0.6f};
@@ -92,16 +94,24 @@ final class DrumMachine {
 
     /** Renders the loop in the background, then plays it. Calling it again restarts at the new tempo / style. */
     void start(int bpm, int style) {
+        start(bpm, style, null, 0);
+    }
+
+    /**
+     * With chords (one string per bar of the song, see BarCells.chords) the loop is the whole song,
+     * drums and chords, starting at bar startBar (0-based); without, a loop of BARS bars of drums.
+     */
+    void start(int bpm, int style, String[] chords, int startBar) {
         this.bpm = bpm;
         this.style = style;
         stopTrack();
-        loops = 0;
-        lastPos = 0;
         playing = true;
         final int gen = ++generation;
+        final int bars = chords == null || chords.length == 0 ? BARS : chords.length;
+        final String[] songChords = chords == null || chords.length == 0 ? null : chords;
         new Thread(() -> {
             ensureSamples();
-            short[] pcm = render(bpm, style);
+            short[] pcm = render(bpm, style, bars, songChords);
             main.post(() -> {
                 if (gen != generation || !playing) return;
                 AudioTrack t = new AudioTrack.Builder()
@@ -115,10 +125,12 @@ final class DrumMachine {
                         .setBufferSizeInBytes(pcm.length * 2)
                         .setTransferMode(AudioTrack.MODE_STATIC)
                         .build();
+                loopBars = bars;
                 loopFrames = pcm.length;
-                framesPerBeat = pcm.length / (BARS * 4);
+                framesPerBeat = pcm.length / (bars * 4);
                 t.write(pcm, 0, pcm.length);
                 t.setLoopPoints(0, pcm.length, -1);
+                if (startBar > 0 && startBar < bars) t.setPlaybackHeadPosition(startBar * framesPerBeat * 4);
                 t.play();
                 track = t;
             });
@@ -132,27 +144,10 @@ final class DrumMachine {
         if (!playing || t == null || total <= 0 || fpb <= 0) return null;
         try {
             long pos = (t.getPlaybackHeadPosition() & 0xFFFFFFFFL) % total;
-            int beatIndex = (int) Math.min(pos / fpb, BARS * 4 - 1);
+            int beatIndex = (int) Math.min(pos / fpb, loopBars * 4 - 1);
             return new int[]{beatIndex / 4, beatIndex % 4};
         } catch (IllegalStateException e) {
             return null;
-        }
-    }
-
-    private long loops, lastPos;
-
-    /** Bars played since the loop started (counting through the loops), or -1 when nothing is playing. Call it often enough to see each wrap of the loop. */
-    long barsPlayed() {
-        AudioTrack t = track;
-        int total = loopFrames, fpb = framesPerBeat;
-        if (!playing || t == null || total <= 0 || fpb <= 0) return -1;
-        try {
-            long pos = (t.getPlaybackHeadPosition() & 0xFFFFFFFFL) % total;
-            if (pos < lastPos) loops++;
-            lastPos = pos;
-            return (loops * total + pos) / ((long) fpb * 4);
-        } catch (IllegalStateException e) {
-            return -1;
         }
     }
 
@@ -226,13 +221,13 @@ final class DrumMachine {
         for (int i = n.size() - 1; i >= 0; i--) if (n.get(i)[0] >= pos) n.remove(i);
     }
 
-    /** BARS bars of 4/4 at the given tempo and style, a crash on the first beat and a fill in the last bar. */
-    private short[] render(int bpm, int style) {
+    /** `bars` bars of 4/4 at the given tempo and style, a crash on the first beat, a fill in the last bar of every 4, and the chords of each bar when given. */
+    private short[] render(int bpm, int style, int bars, String[] chords) {
         int barFrames = (int) Math.round(4 * 60.0 / bpm * RATE);
-        int total = barFrames * BARS;
+        int total = barFrames * bars;
         float[] mix = new float[total];
-        for (int bar = 0; bar < BARS; bar++) {
-            boolean last = bar == BARS - 1;
+        for (int bar = 0; bar < bars; bar++) {
+            boolean last = bar % 4 == 3 || bar == bars - 1;
             List<int[]> notes = pattern(style, last);
             int steps = style == 2 ? 12 : 16;
             if (bar == 0) notes.add(new int[]{0, CRASH, 110});
@@ -245,6 +240,7 @@ final class DrumMachine {
                     mix[j] += smp[i] * gain;
                 }
             }
+            if (chords != null) addChords(mix, bar * barFrames, barFrames, chords[bar]);
         }
         short[] out = new short[total];
         for (int i = 0; i < total; i++) {
@@ -252,6 +248,101 @@ final class DrumMachine {
             out[i] = (short) Math.max(-32768, Math.min(32767, v));
         }
         return out;
+    }
+
+    // ---- chords ----
+
+    private static int pitchClass(char c) {
+        switch (c) {
+            case 'C': return 0;
+            case 'D': return 2;
+            case 'E': return 4;
+            case 'F': return 5;
+            case 'G': return 7;
+            case 'A': return 9;
+            default: return 11; // B
+        }
+    }
+
+    /** Root pitch class (0-11) of a chord token ("Fxm7": F sharp minor 7; x sharp, b flat) and the length of the root. */
+    private static int rootOf(String t, int[] len) {
+        int pc = pitchClass(t.charAt(0));
+        len[0] = 1;
+        if (t.length() > 1 && t.charAt(1) == 'x') { pc++; len[0] = 2; }
+        else if (t.length() > 1 && t.charAt(1) == 'b') { pc--; len[0] = 2; }
+        return (pc + 12) % 12;
+    }
+
+    /** MIDI notes of a chord token: {bass, then the chord above}; null for a rest or an unreadable token. */
+    static int[] chordNotes(String token) {
+        if (token.isEmpty() || token.equals("r") || token.charAt(0) < 'A' || token.charAt(0) > 'G') return null;
+        String slash = null;
+        int sl = token.indexOf('/');
+        if (sl > 0) { slash = token.substring(sl + 1); token = token.substring(0, sl); }
+        int[] len = new int[1];
+        int root = rootOf(token, len);
+        String q = token.substring(len[0]);
+        boolean minor = q.startsWith("m");
+        if (minor) q = q.substring(1);
+        List<Integer> n = new ArrayList<>();
+        int base = 48 + root; // C3 and up
+        n.add(base);
+        boolean fifth = true;
+        if (q.equals("sus2")) n.add(base + 2);
+        else if (q.equals("sus4")) n.add(base + 5);
+        else if (q.equals("5")) { /* power chord: no third */ }
+        else n.add(base + (minor || q.equals("dim") ? 3 : 4));
+        n.add(base + (q.equals("dim") ? 6 : 7));
+        if (q.equals("6")) n.add(base + 9);
+        if (q.equals("7")) n.add(base + 10);
+        if (q.equals("M7")) n.add(base + 11);
+        int bassPc = root;
+        if (slash != null && !slash.isEmpty() && slash.charAt(0) >= 'A' && slash.charAt(0) <= 'G') {
+            int[] l2 = new int[1];
+            bassPc = rootOf(slash, l2);
+        }
+        int[] out = new int[n.size() + 1];
+        out[0] = 36 + bassPc; // C2 and up
+        for (int i = 0; i < n.size(); i++) out[i + 1] = n.get(i);
+        return out;
+    }
+
+    /** The chords of one bar (space separated), each in an equal part of the bar, strummed at its start. */
+    private static void addChords(float[] mix, int barStart, int barFrames, String spec) {
+        String[] tokens = spec.trim().isEmpty() ? new String[0] : spec.trim().split("\\s+");
+        if (tokens.length == 0) return;
+        int seg = barFrames / tokens.length;
+        for (int k = 0; k < tokens.length; k++) {
+            int[] notes = chordNotes(tokens[k]);
+            if (notes == null) continue;
+            int at = barStart + k * seg;
+            int hold = (int) (seg * 0.92);
+            addNote(mix, at, hold, notes[0], 7000f, 0.45f); // bass
+            for (int i = 1; i < notes.length; i++) {
+                addNote(mix, at + i * (RATE / 90), hold, notes[i], 3800f, 0.8f); // strummed upwards, about 11 ms apart
+            }
+            if (tokens.length == 1) { // a whole bar on one chord: a lighter strike on the third beat
+                int again = at + barFrames / 2;
+                for (int i = 1; i < notes.length; i++) {
+                    addNote(mix, again + i * (RATE / 90), barFrames / 2 - RATE / 100, notes[i], 2200f, 0.5f);
+                }
+            }
+        }
+    }
+
+    /** A plucked note: a few harmonics with an exponential decay (tau seconds) and a short fade at the end of the hold. */
+    private static void addNote(float[] mix, int at, int hold, int midi, float amp, float tau) {
+        double f = 440.0 * Math.pow(2, (midi - 69) / 12.0);
+        int total = mix.length;
+        int fade = Math.min(hold / 4, RATE / 25);
+        double w = 2 * Math.PI * f / RATE;
+        for (int i = 0; i < hold; i++) {
+            double t = (double) i / RATE;
+            double v = Math.sin(w * i) + 0.45 * Math.sin(2 * w * i) + 0.2 * Math.sin(3 * w * i);
+            double env = Math.exp(-t / tau) * Math.min(1.0, i / (RATE * 0.004));
+            if (i > hold - fade) env *= (double) (hold - i) / fade;
+            mix[(at + i) % total] += (float) (v * env * amp);
+        }
     }
 
     // ---- drum sounds, synthesised ----
