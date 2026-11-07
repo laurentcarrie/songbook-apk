@@ -27,6 +27,13 @@ final class BarCells {
     final String[] section;
     /** Per bar: its chords, space separated ("Em", "G A", "Fxm7", "Bb/D"; "r" is a rest), "" when unknown. */
     final String[] chords;
+    /** Per bar: the syllable sung on its first beat ("[pickup] syllable"), "" when none. */
+    final String[] lyric;
+    /** Per bar: where its syllable is on the lyrics page (page 0 when it has none; x y is the top left, in PDF points). */
+    final int[] sylPage;
+    final float[] sylX, sylY, sylW, sylH;
+    /** At least one bar has its syllable placed on a page. */
+    boolean hasSyllables;
 
     private BarCells(float pageW, float pageH, int count) {
         this.pageW = pageW;
@@ -44,6 +51,13 @@ final class BarCells {
         section = new String[count];
         chords = new String[count];
         java.util.Arrays.fill(chords, "");
+        sylPage = new int[count];
+        sylX = new float[count];
+        sylY = new float[count];
+        sylW = new float[count];
+        sylH = new float[count];
+        lyric = new String[count];
+        java.util.Arrays.fill(lyric, "");
         java.util.Arrays.fill(section, "");
     }
 
@@ -73,8 +87,23 @@ final class BarCells {
                 c.y[i] = num(e.get("y")).floatValue();
                 c.w[i] = num(e.get("w")).floatValue();
                 c.h[i] = num(e.get("h")).floatValue();
+                if (e.get("lyric") != null) c.lyric[i] = String.valueOf(e.get("lyric")).trim();
                 if (e.get("chords") != null) c.chords[i] = String.valueOf(e.get("chords")).trim();
                 if (e.get("section") != null) c.section[i] = String.valueOf(e.get("section"));
+            }
+            Object syl = m.get("syllables"); // absent in files written by older builds
+            if (syl instanceof List) {
+                for (Object o : (List<?>) syl) {
+                    Map<?, ?> e = (Map<?, ?>) o;
+                    int b = num(e.get("bar")).intValue();
+                    if (b < 1 || b > max) continue;
+                    c.sylPage[b - 1] = num(e.get("page")).intValue();
+                    c.sylX[b - 1] = num(e.get("x")).floatValue();
+                    c.sylY[b - 1] = num(e.get("y")).floatValue();
+                    c.sylW[b - 1] = num(e.get("w")).floatValue();
+                    c.sylH[b - 1] = num(e.get("h")).floatValue();
+                    c.hasSyllables = true;
+                }
             }
             Object dots = m.get("dots"); // absent in files written by older builds
             if (dots instanceof List) {

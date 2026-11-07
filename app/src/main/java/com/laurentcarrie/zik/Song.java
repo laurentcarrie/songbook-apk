@@ -10,6 +10,8 @@ final class Song {
     int tempo;
     /** Delivered mp3 files as "name=path" (path relative to the delivery root). */
     final List<String> mp3 = new java.util.ArrayList<>();
+    /** Problems found in the sources of the song by the build, shown on the song page. */
+    final List<String> warnings = new java.util.ArrayList<>();
 
     Song(String id, String author, String title, String pdf, List<String> tags) {
         this.id = id;

@@ -32,6 +32,9 @@ final class World {
                     Song song = new Song(str(m.get("id")), str(m.get("author")),
                             str(m.get("title")), str(m.get("pdf")), tags);
                     if (m.get("tempo") instanceof Number) song.tempo = ((Number) m.get("tempo")).intValue();
+                    if (m.get("warnings") instanceof List) {
+                        for (Object w : (List<?>) m.get("warnings")) song.warnings.add(str(w));
+                    }
                     if (m.get("mp3") instanceof List) {
                         for (Object e : (List<?>) m.get("mp3")) {
                             Map<?, ?> em = (Map<?, ?>) e;

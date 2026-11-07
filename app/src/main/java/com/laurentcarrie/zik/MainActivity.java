@@ -33,6 +33,8 @@ public class MainActivity extends Activity {
     static final String EXTRA_MP3S = "mp3s";
     /** Per song, its tempo in BPM (0 when unknown). */
     static final String EXTRA_TEMPOS = "tempos";
+    /** Per song, the warnings of the build about it, one per line (world.yml). */
+    static final String EXTRA_WARNINGS = "warnings";
 
     private PdfRenderer renderer;
     private ParcelFileDescriptor pfd;
@@ -40,9 +42,12 @@ public class MainActivity extends Activity {
     private String[] setlistPdfs, setlistTitles, setlistMp3s;
     private FlowLayout mp3Row;
     private android.media.MediaPlayer player;
-    private Button playing, pauseButton, stopButton, drumButton;
+    private Button playing, pauseButton, stopButton, drumButton, viewButton;
+    private boolean lyricsMode; // the page shows the syllable of the active bar instead of the bar
     private DrumMachine drums;
     private int[] setlistTempos;
+    private String[] setlistWarnings;
+    private TextView warningView, drumCaption;
     /** Tempo of the current song (0 if unknown), and the tempo the loop is set to. */
     private int songTempo, drumBpm;
     private LinearLayout drumPanel, drumBarPanel;
@@ -114,6 +119,17 @@ public class MainActivity extends Activity {
         drumButton.setVisibility(View.GONE);
         drumButton.setOnClickListener(v -> toggleDrums());
         bar.addView(drumButton);
+        // the chart shows either the active bar or the active syllable on the lyrics page
+        viewButton = new Button(this);
+        viewButton.setAllCaps(false);
+        viewButton.setVisibility(View.GONE);
+        viewButton.setOnClickListener(v -> {
+            lyricsMode = !lyricsMode;
+            prefs.edit().putBoolean("lyrics_view", lyricsMode).apply();
+            updateViewButton();
+            if (highlight >= 1) selectBar(highlight); else showPage();
+        });
+        bar.addView(viewButton);
         pauseButton = new Button(this);
         pauseButton.setText("⏸");
         pauseButton.setTextSize(22);
@@ -172,6 +188,7 @@ public class MainActivity extends Activity {
         });
 
         prefs = getSharedPreferences("songbook", MODE_PRIVATE);
+        lyricsMode = prefs.getBoolean("lyrics_view", false);
         drumPanel = new LinearLayout(this);
         drumPanel.setOrientation(LinearLayout.HORIZONTAL);
         drumPanel.setGravity(Gravity.CENTER_VERTICAL);
@@ -228,6 +245,10 @@ public class MainActivity extends Activity {
             }
         });
         drumBarPanel.addView(drumBarEdit);
+        drumCaption = new TextView(this);
+        drumCaption.setTextSize(20);
+        drumCaption.setPadding(32, 0, 0, 0);
+        drumBarPanel.addView(drumCaption);
 
         rangePanel = new LinearLayout(this);
         rangePanel.setOrientation(LinearLayout.VERTICAL);
@@ -338,6 +359,14 @@ public class MainActivity extends Activity {
 
         root.addView(bar, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        // what the build found wrong in the sources of the song (world.yml warnings)
+        warningView = new TextView(this);
+        warningView.setTextSize(13);
+        warningView.setTextColor(Color.rgb(200, 0, 0));
+        warningView.setPadding(32, 0, 32, 4);
+        warningView.setVisibility(View.GONE);
+        root.addView(warningView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         beatView = new BeatIndicator(this, 90);
         beatView.setVisibility(View.GONE);
         root.addView(beatView, new LinearLayout.LayoutParams(
@@ -358,6 +387,7 @@ public class MainActivity extends Activity {
         setlistTitles = getIntent().getStringArrayExtra(EXTRA_TITLES);
         setlistMp3s = getIntent().getStringArrayExtra(EXTRA_MP3S);
         setlistTempos = getIntent().getIntArrayExtra(EXTRA_TEMPOS);
+        setlistWarnings = getIntent().getStringArrayExtra(EXTRA_WARNINGS);
         if (setlistPdfs != null) {
             songIndex = getIntent().getIntExtra(EXTRA_INDEX, 0);
             if (Storage.ensureAccess(this)) openSong(songIndex);
@@ -373,6 +403,13 @@ public class MainActivity extends Activity {
     private void openSong(int i) {
         songIndex = i;
         setTitle(setlistTitles[i]);
+        String root = Storage.DELIVERY.getPath() + "/";
+        if (setlistPdfs[i].startsWith(root)) { // the song goes first in the "5 derniers" list
+            SongsActivity.addRecent(prefs, setlistPdfs[i].substring(root.length()));
+        }
+        String warnings = setlistWarnings == null || i >= setlistWarnings.length ? "" : setlistWarnings[i];
+        warningView.setText(warnings.isEmpty() ? "" : "⚠ " + warnings.replace("\n", "\n⚠ "));
+        warningView.setVisibility(warnings.isEmpty() ? View.GONE : View.VISIBLE);
         showMp3s(setlistMp3s == null ? "" : setlistMp3s[i]);
         showDrums(setlistTempos == null ? 0 : setlistTempos[i]);
         openPdf(new File(setlistPdfs[i]));
@@ -487,7 +524,7 @@ public class MainActivity extends Activity {
             handler.post(drumTicker);
         } else {
             if (!drumPaused && player == null && highlight != 0) { // nothing plays: no bar marked
-                highlight = 0;
+                highlight = 0; drumCaption.setText("");
                 if (renderer != null) showPage();
             }
         }
@@ -681,7 +718,7 @@ public class MainActivity extends Activity {
         handler.removeCallbacks(ticker);
         updateControls();
         if (highlight != 0) { // nothing playing: no bar marked
-            highlight = 0;
+            highlight = 0; drumCaption.setText("");
             if (renderer != null) showPage();
         }
     }
@@ -704,11 +741,12 @@ public class MainActivity extends Activity {
     private void loadCells(File pdf) {
         cells = BarCells.load(pdf);
         clickTimes = loadClicks(pdf);
-        highlight = 0;
+        highlight = 0; drumCaption.setText("");
         if (cells != null) {
             drumFirstBar = Math.max(1, Math.min(drumFirstBar, cells.count));
             setBarText(drumFirstBar);
         }
+        updateViewButton();
         updateDrumUi();
         // a drum loop going on from the previous song: play this one's chords from its first bar
         if (drums.isPlaying() && cells != null && cells.count > 1) startDrums(drums.getStyle(), 0);
@@ -716,13 +754,48 @@ public class MainActivity extends Activity {
         if (cells.page[0] > 0) page = Math.min(cells.page[0] - 1, renderer.getPageCount() - 1);
     }
 
+    /** The section of bar n (1-based), then the syllable sung on its first beat, in red. */
+    private CharSequence caption(int n) {
+        String section = cells.section[n - 1], lyric = cells.lyric[n - 1];
+        if (lyric.isEmpty()) return section;
+        android.text.SpannableStringBuilder b = new android.text.SpannableStringBuilder(section);
+        int from = b.length();
+        b.append("  ▸ ").append(lyric);
+        b.setSpan(new android.text.style.ForegroundColorSpan(Color.rgb(200, 0, 0)), from, b.length(), 0);
+        b.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD), from, b.length(), 0);
+        return b;
+    }
+
     /** Highlights bar n (1-based), turning to its page if needed. */
     private void selectBar(int n) {
         if (cells == null || n < 1 || n > cells.count) return;
         highlight = n;
+        drumCaption.setText(caption(n));
         int p = cells.page[n - 1];
+        if (lyricsView()) { // the lyrics page, on the syllable of this bar
+            int lb = lyricBarOf(n);
+            p = lb >= 1 ? cells.sylPage[lb - 1] : 0;
+        }
         if (p > 0 && renderer != null) page = Math.min(p - 1, renderer.getPageCount() - 1);
         showPage();
+    }
+
+    /** The page shows the lyrics: chosen with the toggle, and the song has its syllables placed. */
+    private boolean lyricsView() {
+        return lyricsMode && cells != null && cells.hasSyllables;
+    }
+
+    /** The last bar up to n, in the section of bar n, that has a syllable on the lyrics page; 0 for none. */
+    private int lyricBarOf(int n) {
+        for (int k = n; k >= 1 && cells.section[k - 1].equals(cells.section[n - 1]); k--) {
+            if (cells.sylPage[k - 1] > 0) return k;
+        }
+        return 0;
+    }
+
+    private void updateViewButton() {
+        viewButton.setVisibility(cells != null && cells.hasSyllables ? View.VISIBLE : View.GONE);
+        viewButton.setText(lyricsMode ? "Paroles" : "Grille");
     }
 
     /** True while the chart follows the recording: bar positions and beat times are there. */
@@ -737,7 +810,7 @@ public class MainActivity extends Activity {
         sectionRow.setVisibility(on ? View.VISIBLE : View.GONE);
         missingClicks.setVisibility(on && clickTimes == null ? View.VISIBLE : View.GONE);
         if (!on || posBar.getWidth() == 0) return;
-        sectionLabel.setText(cells.section[highlight - 1]);
+        sectionLabel.setText(caption(highlight));
         sectionLabel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         float usable = posBar.getWidth() - posBar.getPaddingLeft() - posBar.getPaddingRight();
         float frac = posBar.getMax() == 0 ? 0 : (float) posBar.getProgress() / posBar.getMax();
@@ -821,7 +894,29 @@ public class MainActivity extends Activity {
 
         // the active bar, circled, when it is on this page
         int scrollTo = 0;
-        if (cells != null && highlight >= 1 && cells.page[highlight - 1] == page + 1) {
+        boolean lyrics = lyricsView();
+        if (lyrics && highlight >= 1) { // the syllable of the active bar, on the lyrics page
+            int lb = lyricBarOf(highlight);
+            if (lb >= 1 && cells.sylPage[lb - 1] == page + 1) {
+                float k = bmp.getWidth() / cells.pageW;
+                float pad = Math.max(4f, bmp.getWidth() / 150f);
+                android.graphics.RectF r = new android.graphics.RectF(cells.sylX[lb - 1] * k - pad, cells.sylY[lb - 1] * k - pad,
+                        (cells.sylX[lb - 1] + cells.sylW[lb - 1]) * k + pad, (cells.sylY[lb - 1] + cells.sylH[lb - 1]) * k + pad);
+                Canvas canvas = new Canvas(bmp);
+                Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(Math.max(3f, bmp.getWidth() / 200f));
+                paint.setColor(Color.rgb(255, 80, 0));
+                if (cells.lyric[lb - 1].isEmpty()) { // an empty mark (no lyrics on this bar): circled
+                    float rad = Math.max(r.width(), r.height()) * 0.8f;
+                    canvas.drawCircle(r.centerX(), r.centerY(), rad, paint);
+                } else {
+                    canvas.drawRoundRect(r, pad, pad, paint);
+                }
+                scrollTo = (int) r.top;
+            }
+        }
+        if (!lyrics && cells != null && highlight >= 1 && cells.page[highlight - 1] == page + 1) {
             float k = bmp.getWidth() / cells.pageW;
             float cx = cells.x[highlight - 1] * k, cy = cells.y[highlight - 1] * k;
             float cw = cells.w[highlight - 1] * k, ch = cells.h[highlight - 1] * k;
@@ -837,7 +932,7 @@ public class MainActivity extends Activity {
             scrollTo = (int) cy;
         }
         // the dot of the pass being played, in a repeat: filled over the black one
-        if (cells != null && highlight >= 1 && cells.dotPage[highlight - 1] == page + 1) {
+        if (!lyrics && cells != null && highlight >= 1 && cells.dotPage[highlight - 1] == page + 1) {
             float k = bmp.getWidth() / cells.pageW;
             float r = cells.dotR[highlight - 1] * k;
             Canvas canvas = new Canvas(bmp);

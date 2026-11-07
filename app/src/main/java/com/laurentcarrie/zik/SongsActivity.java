@@ -36,7 +36,25 @@ public class SongsActivity extends Activity {
     private String query = "";
     private String tag, book;
     private ListView list;
-    private boolean authorFirst, fuzzyMode;
+    private boolean authorFirst, fuzzyMode, recentOnly;
+    /** How many songs the "last opened" button lists. */
+    static final int RECENT_COUNT = 5;
+
+    /** Notes that the song with this pdf (path relative to the delivery) was just opened: it goes first. */
+    static void addRecent(SharedPreferences prefs, String pdf) {
+        List<String> r = recents(prefs);
+        r.remove(pdf);
+        r.add(0, pdf);
+        while (r.size() > RECENT_COUNT) r.remove(r.size() - 1);
+        prefs.edit().putString("recent", String.join("\n", r)).apply();
+    }
+
+    /** The pdfs of the songs opened last, the latest first. */
+    static List<String> recents(SharedPreferences prefs) {
+        List<String> r = new ArrayList<>();
+        for (String s : prefs.getString("recent", "").split("\n")) if (!s.isEmpty()) r.add(s);
+        return r;
+    }
     private SharedPreferences prefs;
     // Same fonts and colors as the song pdf: blue Jana Skrivana title, orange frcursive author
     private Typeface titleFont, authorFont;
@@ -101,7 +119,22 @@ public class SongsActivity extends Activity {
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.addView(toggle, new LinearLayout.LayoutParams(
+        // the five songs opened last, latest first, instead of the whole list
+        recentOnly = prefs.getBoolean("recentOnly", false);
+        ToggleButton recent = new ToggleButton(this);
+        recent.setTextOn("5 derniers");
+        recent.setTextOff("5 derniers");
+        recent.setChecked(recentOnly);
+        recent.setOnCheckedChangeListener((b, checked) -> {
+            recentOnly = checked;
+            prefs.edit().putBoolean("recentOnly", checked).apply();
+            resort();
+        });
+        LinearLayout toggles = new LinearLayout(this);
+        toggles.setOrientation(LinearLayout.HORIZONTAL);
+        toggles.addView(toggle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        toggles.addView(recent, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        layout.addView(toggles, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         layout.addView(searchRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -139,7 +172,14 @@ public class SongsActivity extends Activity {
 
     private void applyFilter() {
         songs.clear();
-        for (Song s : loaded) {
+        List<Song> source = loaded;
+        if (recentOnly) { // the songs opened last, the latest first
+            source = new ArrayList<>();
+            for (String pdf : recents(prefs)) {
+                for (Song s : loaded) if (s.pdf.equals(pdf)) source.add(s);
+            }
+        }
+        for (Song s : source) {
             String text = authorFirst ? s.author + " " + s.title : s.title + " " + s.author;
             if (fuzzyMode ? fuzzy(query, text) : exact(query, text)) songs.add(s);
         }
@@ -174,7 +214,7 @@ public class SongsActivity extends Activity {
         Intent i = new Intent(this, MainActivity.class);
         // Hand over the whole displayed list so the viewer can go to the
         // previous / next song of it.
-        List<String> pdfs = new ArrayList<>(), titles = new ArrayList<>(), mp3s = new ArrayList<>();
+        List<String> pdfs = new ArrayList<>(), titles = new ArrayList<>(), mp3s = new ArrayList<>(), warnings = new ArrayList<>();
         List<Integer> tempos = new ArrayList<>();
         int index = 0;
         for (Song s : songs) {
@@ -182,6 +222,7 @@ public class SongsActivity extends Activity {
             if (s == song) index = pdfs.size();
             pdfs.add(new File(Storage.DELIVERY, s.pdf).getPath());
             mp3s.add(String.join("\n", s.mp3));
+            warnings.add(String.join("\n", s.warnings));
             tempos.add(s.tempo);
             titles.add(authorFirst ? s.author + " - " + s.title : s.title + " - " + s.author);
         }
@@ -190,6 +231,7 @@ public class SongsActivity extends Activity {
         for (int k = 0; k < t.length; k++) t[k] = tempos.get(k);
         i.putExtra(MainActivity.EXTRA_TEMPOS, t);
         i.putExtra(MainActivity.EXTRA_MP3S, mp3s.toArray(new String[0]));
+        i.putExtra(MainActivity.EXTRA_WARNINGS, warnings.toArray(new String[0]));
         i.putExtra(MainActivity.EXTRA_TITLES, titles.toArray(new String[0]));
         i.putExtra(MainActivity.EXTRA_INDEX, index);
         startActivity(i);
