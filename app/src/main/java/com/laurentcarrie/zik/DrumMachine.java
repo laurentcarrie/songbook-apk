@@ -428,6 +428,7 @@ final class DrumMachine {
         if (q.equals("6")) n.add(base + 9);
         if (q.equals("7")) n.add(base + 10);
         if (q.equals("M7")) n.add(base + 11);
+        if (q.equals("9")) { n.add(base + 10); n.add(base + 14); } // dominant ninth (or minor ninth): the seventh and the ninth
         int bassPc = root;
         if (slash != null && !slash.isEmpty() && slash.charAt(0) >= 'A' && slash.charAt(0) <= 'G') {
             int[] l2 = new int[1];
