@@ -52,9 +52,14 @@ public class MainActivity extends Activity {
     private int songTempo, drumBpm;
     private LinearLayout drumPanel, drumBarPanel;
     private TextView drumBarLabel;
+    private LinearLayout drumMixPanel;
+    private SeekBar chordSeek;
+    private Button instrumentButton;
+    private TextView chordLabel;
     private android.widget.EditText drumBarEdit;
     private boolean drumPaused, settingBarText; // paused to type a bar number; true while the field is set by the code
-    private int drumFirstBar = 1; // bar the drum track starts on
+    private int drumFirstBar = 1, drumToBar = 1; // the bars the drum track plays, from and to (1-based, included)
+    private android.widget.EditText drumToEdit;
     private final Runnable drumTicker = new Runnable() {
         @Override public void run() {
             drumTick();
@@ -208,7 +213,7 @@ public class MainActivity extends Activity {
         drumPanel.addView(reset);
         resetButton = reset;
 
-        // first bar of the drum track, when the song has a structure
+        // the bars the drum track plays, from .. to, when the song has a structure; tapping a number pauses it
         drumBarPanel = new LinearLayout(this);
         drumBarPanel.setOrientation(LinearLayout.HORIZONTAL);
         drumBarPanel.setGravity(Gravity.CENTER_VERTICAL);
@@ -216,39 +221,65 @@ public class MainActivity extends Activity {
         drumBarPanel.setVisibility(View.GONE);
         drumBarLabel = new TextView(this);
         drumBarLabel.setTextSize(20);
-        drumBarLabel.setText("Mesure  #");
+        drumBarLabel.setText("De #");
         drumBarPanel.addView(drumBarLabel);
-        drumBarEdit = new android.widget.EditText(this);
-        drumBarEdit.setTextSize(20);
-        drumBarEdit.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        drumBarEdit.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
-        drumBarEdit.setSelectAllOnFocus(true);
-        drumBarEdit.setMinWidth(160);
-        drumBarEdit.setFocusableInTouchMode(false); // while playing a tap only pauses
-        drumBarEdit.setOnClickListener(v -> pauseDrumsForEdit());
-        drumBarEdit.setOnEditorActionListener((v, action, ev) -> {
-            ((android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
-                    .hideSoftInputFromWindow(v.getWindowToken(), 0);
-            return true;
-        });
-        drumBarEdit.addTextChangedListener(new android.text.TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
-            @Override public void onTextChanged(CharSequence c, int a, int b, int d) { }
-            @Override public void afterTextChanged(android.text.Editable e) {
-                if (settingBarText || !drumPaused || cells == null) return;
-                try {
-                    int n = Integer.parseInt(e.toString().trim());
-                    if (n < 1 || n > cells.count) return;
-                    drumFirstBar = n;
-                    selectBar(n); // the circle moves to the bar typed
-                } catch (NumberFormatException ignored) { }
-            }
-        });
+        drumBarEdit = barField(false);
         drumBarPanel.addView(drumBarEdit);
+        TextView toLabel = new TextView(this);
+        toLabel.setTextSize(20);
+        toLabel.setText("  à #");
+        drumBarPanel.addView(toLabel);
+        drumToEdit = barField(true);
+        drumBarPanel.addView(drumToEdit);
         drumCaption = new TextView(this);
         drumCaption.setTextSize(20);
         drumCaption.setPadding(32, 0, 0, 0);
         drumBarPanel.addView(drumCaption);
+
+        // level of the drums and of the chords (two tracks of the drum machine), kept between sessions
+        drumMixPanel = new LinearLayout(this);
+        drumMixPanel.setOrientation(LinearLayout.HORIZONTAL);
+        drumMixPanel.setGravity(Gravity.CENTER_VERTICAL);
+        drumMixPanel.setPadding(32, 0, 32, 8);
+        drumMixPanel.setVisibility(View.GONE);
+        TextView drumLevelLabel = new TextView(this);
+        drumLevelLabel.setTextSize(16);
+        drumLevelLabel.setText("Batterie");
+        drumMixPanel.addView(drumLevelLabel);
+        SeekBar drumSeek = new SeekBar(this);
+        drumSeek.setMax(100);
+        drumSeek.setProgress(prefs.getInt("vol_drums", 100));
+        drumMixPanel.addView(drumSeek, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        chordLabel = new TextView(this);
+        chordLabel.setTextSize(16);
+        chordLabel.setText("Accords");
+        drumMixPanel.addView(chordLabel);
+        chordSeek = new SeekBar(this);
+        chordSeek.setMax(100);
+        chordSeek.setProgress(prefs.getInt("vol_chords", 100));
+        drumMixPanel.addView(chordSeek, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        drums.setVolumes(drumSeek.getProgress() / 100f, chordSeek.getProgress() / 100f);
+        // instrument of the chords: a tap goes to the next one (the song is rendered again, from the bar it is on)
+        drums.setChordInstrument(prefs.getInt("chord_instrument", 0));
+        instrumentButton = new Button(this);
+        instrumentButton.setAllCaps(false);
+        instrumentButton.setText(DrumMachine.INSTRUMENTS[drums.getChordInstrument()]);
+        instrumentButton.setOnClickListener(v -> {
+            int next = (drums.getChordInstrument() + 1) % DrumMachine.INSTRUMENTS.length;
+            drums.setChordInstrument(next);
+            prefs.edit().putInt("chord_instrument", next).apply();
+            instrumentButton.setText(DrumMachine.INSTRUMENTS[next]);
+            if (drums.isPlaying()) startDrums(drums.getStyle(), currentDrumOffset(), false);
+        });
+        drumMixPanel.addView(instrumentButton);
+        SeekBar.OnSeekBarChangeListener mixListener = new SimpleSeek() {
+            @Override void changed(int v) {
+                prefs.edit().putInt("vol_drums", drumSeek.getProgress()).putInt("vol_chords", chordSeek.getProgress()).apply();
+                drums.setVolumes(drumSeek.getProgress() / 100f, chordSeek.getProgress() / 100f);
+            }
+        };
+        drumSeek.setOnSeekBarChangeListener(mixListener);
+        chordSeek.setOnSeekBarChangeListener(mixListener);
 
         rangePanel = new LinearLayout(this);
         rangePanel.setOrientation(LinearLayout.VERTICAL);
@@ -329,6 +360,7 @@ public class MainActivity extends Activity {
             loopOn = !loopOn;
             prefs.edit().putBoolean("loop", loopOn).apply();
             paintLoop();
+            if (drums.isPlaying()) drums.setLoop(loopOn); // the drum range goes round, or plays to its end
         });
         loopBox.setVisibility(View.GONE);
         bar.addView(loopBox, bar.indexOfChild(stopButton) + 1);
@@ -377,6 +409,8 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(drumBarPanel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(drumMixPanel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(rangePanel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(scrollView, new LinearLayout.LayoutParams(
@@ -404,7 +438,7 @@ public class MainActivity extends Activity {
         songIndex = i;
         setTitle(setlistTitles[i]);
         String root = Storage.DELIVERY.getPath() + "/";
-        if (setlistPdfs[i].startsWith(root)) { // the song goes first in the "5 derniers" list
+        if (setlistPdfs[i].startsWith(root)) { // the song goes first in the "10 derniers" list
             SongsActivity.addRecent(prefs, setlistPdfs[i].substring(root.length()));
         }
         String warnings = setlistWarnings == null || i >= setlistWarnings.length ? "" : setlistWarnings[i];
@@ -431,7 +465,7 @@ public class MainActivity extends Activity {
         songTempo = tempo;
         if (drums.isPlaying()) {
             drumBpm = tempo > 0 ? tempo : drums.getBpm();
-            if (drumBpm != drums.getBpm()) startDrums(drums.getStyle(), currentDrumBar());
+            if (drumBpm != drums.getBpm()) startDrums(drums.getStyle(), currentDrumOffset(), false);
         } else {
             drumBpm = tempo;
         }
@@ -451,74 +485,136 @@ public class MainActivity extends Activity {
 
     private void setDrumBpm(int bpm) {
         drumBpm = Math.max(40, Math.min(220, bpm));
-        if (drums.isPlaying()) startDrums(drums.getStyle(), currentDrumBar());
+        if (drums.isPlaying()) startDrums(drums.getStyle(), currentDrumOffset(), false);
         updateDrumUi();
     }
 
     /** Starts the drums at drumBpm; with the bars of the song, the whole song plays, with its chords, from bar index startBar. */
-    private void startDrums(int style, int startBar) {
-        boolean song = cells != null && cells.count > 1;
-        drums.start(drumBpm, style, song ? cells.chords : null, song ? startBar : 0);
+    /** The loop icon is there while an mp3 is loaded, and while the drums play or are paused to edit the range. */
+    private void updateLoopVisibility() {
+        loopBox.setVisibility(player != null || drums.isPlaying() || drumPaused ? View.VISIBLE : View.GONE);
     }
 
-    /** Index (0-based) of the bar the drums are on, for a restart at another tempo. */
-    private int currentDrumBar() {
-        return highlight >= 1 ? highlight - 1 : drumFirstBar - 1;
+    /** With the bars of the song a bar of stick beats opens each pass of the range; countInFirst starts on it, else at offsetBars. */
+    private void startDrums(int style, int offsetBars, boolean countInFirst) {
+        boolean song = cells != null && cells.count > 1;
+        int from = Math.min(drumFirstBar, drumToBar) - 1, to = Math.max(drumFirstBar, drumToBar) - 1;
+        drums.start(drumBpm, style, song ? cells.chords : null, from, to, song && countInFirst ? -1 : offsetBars, song, loopOn);
+    }
+
+    /** Where the drums are in the range, in bars (0-based), for a restart at another tempo or instrument. */
+    private int currentDrumOffset() {
+        int from = Math.min(drumFirstBar, drumToBar);
+        return highlight >= from ? highlight - from : 0;
     }
 
     private void toggleDrums() {
         if (drums.isPlaying()) {
             drums.stop();
             drumPaused = false;
-            drumFirstBar = 1; // the next start is from the top
+            drumFirstBar = 1; // the next start is the whole song
+            drumToBar = cells != null ? cells.count : 1;
+            if (cells != null) setBarText(drumFirstBar, drumToBar);
         } else {
-            startDrums(0, drumFirstBar - 1); // style 0: rock
+            startDrums(0, 0, true); // style 0: rock, a bar of stick beats first
         }
         updateDrumUi();
     }
 
     /** Drum track: the chart follows its bars, counted from the first bar chosen with the slider. */
-    /** Tap on the bar number: the drums pause and the number can be typed; the drum button resumes from it. */
-    private void pauseDrumsForEdit() {
+    /** One of the two bar number fields (from, to): a tap pauses the drums and the number can be typed; the drum button then starts again on the range. */
+    private android.widget.EditText barField(boolean isTo) {
+        android.widget.EditText e = new android.widget.EditText(this);
+        e.setTextSize(20);
+        e.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        e.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+        e.setSelectAllOnFocus(true);
+        e.setMinWidth(130);
+        e.setFocusableInTouchMode(false); // while playing a tap only pauses
+        e.setOnClickListener(v -> pauseDrumsForEdit(e));
+        // no copy / paste toolbar over the controls when the number is selected
+        android.view.ActionMode.Callback noMenu = new android.view.ActionMode.Callback() {
+            @Override public boolean onCreateActionMode(android.view.ActionMode m, android.view.Menu menu) { return false; }
+            @Override public boolean onPrepareActionMode(android.view.ActionMode m, android.view.Menu menu) { return false; }
+            @Override public boolean onActionItemClicked(android.view.ActionMode m, android.view.MenuItem item) { return false; }
+            @Override public void onDestroyActionMode(android.view.ActionMode m) { }
+        };
+        e.setCustomSelectionActionModeCallback(noMenu);
+        e.setCustomInsertionActionModeCallback(noMenu);
+        e.setOnEditorActionListener((v, action, ev) -> {
+            ((android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
+                    .hideSoftInputFromWindow(v.getWindowToken(), 0);
+            return true;
+        });
+        e.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
+            @Override public void onTextChanged(CharSequence c, int a, int b, int d) { }
+            @Override public void afterTextChanged(android.text.Editable t) {
+                if (settingBarText || !drumPaused || cells == null) return;
+                try {
+                    int n = Integer.parseInt(t.toString().trim());
+                    if (n < 1 || n > cells.count) return;
+                    if (isTo) drumToBar = n; else drumFirstBar = n;
+                    selectBar(n); // the circle moves to the bar typed
+                } catch (NumberFormatException ignored) { }
+            }
+        });
+        return e;
+    }
+
+    private void pauseDrumsForEdit(android.widget.EditText field) {
         if (!drums.isPlaying()) return;
-        drumFirstBar = highlight >= 1 ? highlight : drumFirstBar;
         drums.stop();
         drumPaused = true;
         updateDrumUi();
-        drumBarEdit.setFocusableInTouchMode(true);
-        drumBarEdit.requestFocus();
-        drumBarEdit.selectAll();
+        field.requestFocus();
         ((android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
-                .showSoftInput(drumBarEdit, 0);
+                .showSoftInput(field, 0);
     }
 
-    private void setBarText(int n) {
+    private void setBarText(int from, int to) {
         settingBarText = true;
-        drumBarEdit.setText(String.valueOf(n));
+        drumBarEdit.setText(String.valueOf(from));
+        drumToEdit.setText(String.valueOf(to));
         settingBarText = false;
     }
 
     private void drumTick() {
-        if (!drums.isPlaying() || cells == null || drums.getLoopBars() != cells.count) return;
-        int[] pos = drums.position(); // {bar, beat} of the song
+        if (!drums.isPlaying()) return;
+        if (drums.finished()) { // a range that does not loop has played to its end: back to its start, paused
+            drums.stop();
+            drumPaused = true;
+            updateDrumUi();
+            if (cells != null) selectBar(Math.min(drumFirstBar, drumToBar));
+            return;
+        }
+        if (cells == null || cells.count < 2) return;
+        int[] pos = drums.position(); // {bar of the range (-1 in the count-in), beat}
         if (pos == null) return;
-        int bar = pos[0] + 1;
-        if (bar != highlight) { selectBar(bar); setBarText(bar); }
+        int bar = Math.min(drumFirstBar, drumToBar) + Math.max(0, pos[0]);
+        if (bar >= 1 && bar <= cells.count && bar != highlight) selectBar(bar);
     }
 
     private void updateDrumUi() {
         boolean on = drums.isPlaying();
         if (on) drumPaused = false;
         boolean shown = on || drumPaused; // paused to edit the bar: the panels stay
+        updateLoopVisibility();
         drumButton.setVisibility(songTempo > 0 || shown ? View.VISIBLE : View.GONE);
         drumButton.setText((on ? "■ 🥁 " : "🥁 ") + (on ? drumBpm : songTempo));
         drumPanel.setVisibility(shown ? View.VISIBLE : View.GONE);
         beatView.setVisibility(on ? View.VISIBLE : View.GONE);
         mp3Row.setVisibility(shown || player != null ? View.GONE : View.VISIBLE); // no list while something plays
         boolean bars = shown && cells != null && cells.count > 1;
-        if (!shown) drumBarEdit.setFocusableInTouchMode(false);
-        if (on) drumBarEdit.setFocusableInTouchMode(false);
+        // both numbers can be typed while the drums are paused; while they play a tap only pauses
+        boolean editable = drumPaused && !on;
+        drumBarEdit.setFocusableInTouchMode(editable);
+        drumToEdit.setFocusableInTouchMode(editable);
         drumBarPanel.setVisibility(bars ? View.VISIBLE : View.GONE);
+        drumMixPanel.setVisibility(shown ? View.VISIBLE : View.GONE);
+        chordLabel.setVisibility(bars ? View.VISIBLE : View.GONE); // the chords have a level only when the song has them
+        chordSeek.setVisibility(bars ? View.VISIBLE : View.GONE);
+        instrumentButton.setVisibility(bars ? View.VISIBLE : View.GONE);
         handler.removeCallbacks(drumTicker);
         if (on) {
             handler.post(drumTicker);
@@ -701,7 +797,7 @@ public class MainActivity extends Activity {
         boolean loaded = player != null;
         pauseButton.setVisibility(loaded ? View.VISIBLE : View.GONE);
         stopButton.setVisibility(loaded ? View.VISIBLE : View.GONE);
-        loopBox.setVisibility(loaded ? View.VISIBLE : View.GONE);
+        updateLoopVisibility();
         rangePanel.setVisibility(loaded ? View.VISIBLE : View.GONE);
         mp3Row.setVisibility(loaded || drums.isPlaying() ? View.GONE : View.VISIBLE); // the list comes back on stop
         pauseButton.setText(paused ? "▶" : "⏸");
@@ -743,13 +839,14 @@ public class MainActivity extends Activity {
         clickTimes = loadClicks(pdf);
         highlight = 0; drumCaption.setText("");
         if (cells != null) {
-            drumFirstBar = Math.max(1, Math.min(drumFirstBar, cells.count));
-            setBarText(drumFirstBar);
+            drumFirstBar = 1; // a new song: all its bars
+            drumToBar = cells.count;
+            setBarText(drumFirstBar, drumToBar);
         }
         updateViewButton();
         updateDrumUi();
         // a drum loop going on from the previous song: play this one's chords from its first bar
-        if (drums.isPlaying() && cells != null && cells.count > 1) startDrums(drums.getStyle(), 0);
+        if (drums.isPlaying() && cells != null && cells.count > 1) startDrums(drums.getStyle(), 0, false);
         if (cells == null) return;
         if (cells.page[0] > 0) page = Math.min(cells.page[0] - 1, renderer.getPageCount() - 1);
     }
@@ -770,7 +867,7 @@ public class MainActivity extends Activity {
     private void selectBar(int n) {
         if (cells == null || n < 1 || n > cells.count) return;
         highlight = n;
-        drumCaption.setText(caption(n));
+        drumCaption.setText(new android.text.SpannableStringBuilder("#" + n + "  ").append(caption(n)));
         int p = cells.page[n - 1];
         if (lyricsView()) { // the lyrics page, on the syllable of this bar
             int lb = lyricBarOf(n);
@@ -979,8 +1076,20 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStop() {
+        super.onStop();
+        // leaving the app (home, another app) must not leave the drums playing with no way to stop them
+        if (!isChangingConfigurations() && (drums.isPlaying() || drumPaused)) {
+            drums.stop();
+            drumPaused = false;
+            updateDrumUi();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
-        stopMp3(); // the drum loop goes on: it is stopped with its own button
+        drums.stop(); // leaving the song page stops the drums; they are stopped with their own button before
+        stopMp3();
         closePdf();
         super.onDestroy();
     }
