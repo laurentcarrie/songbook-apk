@@ -36,7 +36,7 @@ public class SongsActivity extends Activity {
     private String query = "";
     private String tag, book;
     private ListView list;
-    private boolean authorFirst, fuzzyMode, recentOnly;
+    private boolean authorFirst, fuzzyMode, recentOnly, starOnly;
     /** How many songs the "last opened" button lists. */
     static final int RECENT_COUNT = 10;
 
@@ -47,6 +47,36 @@ public class SongsActivity extends Activity {
         r.add(0, pdf);
         while (r.size() > RECENT_COUNT) r.remove(r.size() - 1);
         prefs.edit().putString("recent", String.join("\n", r)).apply();
+    }
+
+    private static final int STAR_GOLD = Color.rgb(255, 193, 7), STAR_GREY = Color.rgb(170, 170, 170);
+
+    /** The ids of the starred songs. */
+    private java.util.Set<String> starred() {
+        java.util.Set<String> r = new java.util.HashSet<>();
+        for (String s : prefs.getString("starred", "").split("\n")) if (!s.isEmpty()) r.add(s);
+        return r;
+    }
+
+    private void toggleStar(Song song) {
+        java.util.Set<String> r = starred();
+        if (!r.remove(song.id)) r.add(song.id);
+        prefs.edit().putString("starred", String.join("\n", r)).apply();
+        if (starOnly) applyFilter(); // an unstarred song leaves the starred list
+        else ((BaseAdapter) list.getAdapter()).notifyDataSetChanged();
+    }
+
+    /** On: coloured with white bold text; off: the plain grey button. */
+    private static void paintToggle(ToggleButton b, boolean on, int onColor, android.graphics.drawable.Drawable offBackground) {
+        if (on) {
+            b.setBackgroundColor(onColor);
+            b.setTextColor(Color.WHITE);
+            b.setTypeface(null, Typeface.BOLD);
+        } else {
+            b.setBackground(offBackground);
+            b.setTextColor(Color.DKGRAY);
+            b.setTypeface(null, Typeface.NORMAL);
+        }
     }
 
     /** The pdfs of the songs opened last, the latest first. */
@@ -127,18 +157,7 @@ public class SongsActivity extends Activity {
         recent.setAllCaps(false);
         final android.graphics.drawable.Drawable offLook = recent.getBackground();
         final android.graphics.drawable.Drawable offBackground = offLook == null ? null : offLook.getConstantState().newDrawable();
-        // on: green with white bold text; off: the plain grey button
-        Runnable paint = () -> {
-            if (recentOnly) {
-                recent.setBackgroundColor(Color.rgb(46, 158, 79));
-                recent.setTextColor(Color.WHITE);
-                recent.setTypeface(null, Typeface.BOLD);
-            } else {
-                recent.setBackground(offBackground);
-                recent.setTextColor(Color.DKGRAY);
-                recent.setTypeface(null, Typeface.NORMAL);
-            }
-        };
+        Runnable paint = () -> paintToggle(recent, recentOnly, Color.rgb(46, 158, 79), offBackground);
         recent.setChecked(recentOnly);
         toggle.setEnabled(!recentOnly);
         paint.run();
@@ -149,10 +168,28 @@ public class SongsActivity extends Activity {
             paint.run();
             resort();
         });
+        // only the starred songs
+        starOnly = prefs.getBoolean("starOnly", false);
+        ToggleButton starButton = new ToggleButton(this);
+        starButton.setTextOn("★");
+        starButton.setTextOff("★");
+        starButton.setAllCaps(false);
+        final android.graphics.drawable.Drawable starOff = starButton.getBackground() == null ? null
+                : starButton.getBackground().getConstantState().newDrawable();
+        Runnable paintStar = () -> paintToggle(starButton, starOnly, STAR_GOLD, starOff);
+        starButton.setChecked(starOnly);
+        paintStar.run();
+        starButton.setOnCheckedChangeListener((b, checked) -> {
+            starOnly = checked;
+            prefs.edit().putBoolean("starOnly", checked).apply();
+            paintStar.run();
+            applyFilter();
+        });
         LinearLayout toggles = new LinearLayout(this);
         toggles.setOrientation(LinearLayout.HORIZONTAL);
         toggles.addView(toggle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         toggles.addView(recent, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        toggles.addView(starButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.5f));
         layout.addView(toggles, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         layout.addView(searchRow, new LinearLayout.LayoutParams(
@@ -198,7 +235,9 @@ public class SongsActivity extends Activity {
                 for (Song s : loaded) if (s.pdf.equals(pdf)) source.add(s);
             }
         }
+        java.util.Set<String> stars = starOnly ? starred() : null;
         for (Song s : source) {
+            if (stars != null && !stars.contains(s.id)) continue;
             String text = authorFirst ? s.author + " " + s.title : s.title + " " + s.author;
             if (fuzzyMode ? fuzzy(query, text) : exact(query, text)) songs.add(s);
         }
@@ -286,7 +325,22 @@ public class SongsActivity extends Activity {
                 row.addView(title);
                 row.addView(author);
             }
-            return row;
+            // the star: gold when the song is starred, grey otherwise; a tap changes it
+            final Song song = songs.get(i);
+            TextView star = new TextView(SongsActivity.this);
+            star.setText("★");
+            star.setTextSize(36);
+            star.setGravity(android.view.Gravity.CENTER);
+            star.setPadding(24, 0, 24, 0);
+            star.setTextColor(starred().contains(song.id) ? STAR_GOLD : STAR_GREY);
+            star.setOnClickListener(v -> toggleStar(song));
+            LinearLayout line = new LinearLayout(SongsActivity.this);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            line.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            line.addView(row, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            line.addView(star, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            return line;
         }
     }
 }
