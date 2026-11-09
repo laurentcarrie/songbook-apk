@@ -67,7 +67,6 @@ public class MenuActivity extends Activity {
                 if (names.isEmpty()) Storage.archiveInfo("pdf"); // only tests the connection
                 for (String n : names) {
                     if (!Storage.isUpToDate(n, prefs, Storage.archiveInfo(n))) color = ORANGE;
-                    if (n.equals("pdf") && !Storage.worldUpToDate(prefs)) color = ORANGE; // world.yml changed
                 }
             } catch (Exception e) {
                 color = RED;

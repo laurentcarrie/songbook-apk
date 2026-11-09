@@ -85,12 +85,9 @@ public class SyncActivity extends Activity {
                 try {
                     Storage.ArchiveInfo info = Storage.archiveInfo(names[i]);
                     boolean tarballOk = Storage.isUpToDate(names[i], prefs, info);
-                    // The pdf group also holds world.yml, which is not in the tarball
-                    boolean worldOk = !names[i].equals("pdf") || Storage.worldUpToDate(prefs);
-                    boolean ok = tarballOk && worldOk;
+                    boolean ok = tarballOk;
                     state[i] = ok ? 0 : 1;
-                    suffix = ok ? " — à jour"
-                            : tarballOk ? " — mise à jour disponible (world.yml)" : " — mise à jour disponible";
+                    suffix = ok ? " — à jour" : " — mise à jour disponible";
                 } catch (Exception e) {
                     state[i] = 2;
                     suffix = " — état inconnu (hors ligne ?)";
@@ -190,7 +187,6 @@ public class SyncActivity extends Activity {
             try {
                 java.util.List<String> done = new java.util.ArrayList<>();
                 if (doPdf) {
-                    Storage.downloadWorld(prefs, prog);
                     done.add(describe(Storage.syncArchive("pdf", prefs, force, prog), "fichiers PDF"));
                 }
                 if (doMp3) done.add(describe(Storage.syncArchive("mp3", prefs, force, prog), "MP3"));

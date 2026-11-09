@@ -38,7 +38,7 @@ public class SongsActivity extends Activity {
     private ListView list;
     private boolean authorFirst, fuzzyMode, recentOnly;
     /** How many songs the "last opened" button lists. */
-    static final int RECENT_COUNT = 5;
+    static final int RECENT_COUNT = 10;
 
     /** Notes that the song with this pdf (path relative to the delivery) was just opened: it goes first. */
     static void addRecent(SharedPreferences prefs, String pdf) {
@@ -119,15 +119,34 @@ public class SongsActivity extends Activity {
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        // the five songs opened last, latest first, instead of the whole list
+        // the ten songs opened last, latest first, instead of the whole list
         recentOnly = prefs.getBoolean("recentOnly", false);
         ToggleButton recent = new ToggleButton(this);
-        recent.setTextOn("5 derniers");
-        recent.setTextOff("5 derniers");
+        recent.setTextOn("✓ 10 derniers");
+        recent.setTextOff("10 derniers");
+        recent.setAllCaps(false);
+        final android.graphics.drawable.Drawable offLook = recent.getBackground();
+        final android.graphics.drawable.Drawable offBackground = offLook == null ? null : offLook.getConstantState().newDrawable();
+        // on: green with white bold text; off: the plain grey button
+        Runnable paint = () -> {
+            if (recentOnly) {
+                recent.setBackgroundColor(Color.rgb(46, 158, 79));
+                recent.setTextColor(Color.WHITE);
+                recent.setTypeface(null, Typeface.BOLD);
+            } else {
+                recent.setBackground(offBackground);
+                recent.setTextColor(Color.DKGRAY);
+                recent.setTypeface(null, Typeface.NORMAL);
+            }
+        };
         recent.setChecked(recentOnly);
+        toggle.setEnabled(!recentOnly);
+        paint.run();
         recent.setOnCheckedChangeListener((b, checked) -> {
             recentOnly = checked;
             prefs.edit().putBoolean("recentOnly", checked).apply();
+            toggle.setEnabled(!checked);
+            paint.run();
             resort();
         });
         LinearLayout toggles = new LinearLayout(this);

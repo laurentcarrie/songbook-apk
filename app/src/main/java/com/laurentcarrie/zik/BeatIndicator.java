@@ -50,7 +50,7 @@ final class BeatIndicator extends View {
         paint.setStyle(Paint.Style.FILL);
         paint.setTextSize(h * 0.32f);
         paint.setColor(Color.GRAY);
-        String label = pos == null ? "" : "mesure " + (pos[0] + 1) + " / " + drums.getLoopBars();
+        String label = pos == null ? "" : pos[0] < 0 ? "décompte" : "mesure " + (pos[0] + 1) + " / " + drums.getLoopBars();
         canvas.drawText(label, h * 0.3f, h * 0.62f, paint);
         float start = w * 0.42f, step = (w - start - h * 0.5f) / 3f;
         for (int i = 0; i < 4; i++) {
