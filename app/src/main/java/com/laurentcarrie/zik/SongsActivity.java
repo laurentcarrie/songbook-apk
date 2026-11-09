@@ -140,10 +140,12 @@ public class SongsActivity extends Activity {
             }
         };
         recent.setChecked(recentOnly);
+        toggle.setEnabled(!recentOnly);
         paint.run();
         recent.setOnCheckedChangeListener((b, checked) -> {
             recentOnly = checked;
             prefs.edit().putBoolean("recentOnly", checked).apply();
+            toggle.setEnabled(!checked);
             paint.run();
             resort();
         });

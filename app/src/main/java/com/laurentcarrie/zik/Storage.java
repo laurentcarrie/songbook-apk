@@ -23,7 +23,6 @@ final class Storage {
     static final File DELIVERY = new File("/sdcard/Download/songbook/delivery");
     static final File WORLD = new File(DELIVERY, "world.yml");
 
-    static final String WORLD_URL = "https://move-the-line.org/api/delivery/world.yml";
 
     /** Returned by syncArchive when the archive has not changed since the last sync. */
     static final int UNCHANGED = -1;
@@ -152,28 +151,6 @@ final class Storage {
 
     static void download(String url, File dest) throws Exception {
         download(url, dest, null, "");
-    }
-
-    /** Downloads world.yml and remembers its ETag, to tell later whether it changed on the server. */
-    static void downloadWorld(SharedPreferences prefs, Progress p) throws Exception {
-        String etag = download(WORLD_URL, WORLD, p, "Téléchargement de world.yml");
-        if (etag != null) prefs.edit().putString("etag_world", etag).apply();
-    }
-
-    /** True when world.yml is on the tablet and unchanged on the server (one small conditional request). */
-    static boolean worldUpToDate(SharedPreferences prefs) throws Exception {
-        String etag = prefs.getString("etag_world", null);
-        HttpURLConnection c = (HttpURLConnection) new URL(WORLD_URL).openConnection();
-        c.setConnectTimeout(10000);
-        c.setReadTimeout(20000);
-        if (etag != null) c.setRequestProperty("If-None-Match", etag);
-        try {
-            int code = c.getResponseCode();
-            if (code != 200 && code != 304) throw new Exception("HTTP " + code);
-            return code == 304 && etag != null && WORLD.isFile();
-        } finally {
-            c.disconnect();
-        }
     }
 
     /** Returns the ETag the server sent, if any. */
