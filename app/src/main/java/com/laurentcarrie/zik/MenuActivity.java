@@ -39,6 +39,10 @@ public class MenuActivity extends Activity {
         syncButton = addButton(layout, "🔄  Sync", Color.GRAY,
                 () -> startActivity(new Intent(this, SyncActivity.class)));
 
+        try { // the version of the apk, from versionName in app/build.gradle
+            setTitle("laurent-zik v" + getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
+        } catch (Exception ignored) { }
+
         android.widget.ScrollView scroll = new android.widget.ScrollView(this);
         scroll.setFillViewport(true);
         scroll.addView(layout);
