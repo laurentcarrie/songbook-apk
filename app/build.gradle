@@ -5,6 +5,8 @@ def keystoreProps = new Properties()
 def keystoreFile = rootProject.file('keystore.properties')
 if (keystoreFile.exists()) keystoreFile.withInputStream { keystoreProps.load(it) }
 
+base.archivesName = 'laurent-zik'
+
 android {
     namespace 'com.laurentcarrie.zik'
     compileSdk 34

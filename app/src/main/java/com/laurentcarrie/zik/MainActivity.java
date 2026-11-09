@@ -96,6 +96,14 @@ public class MainActivity extends Activity {
     private int songIndex = 0;
 
     private ScrollView scrollView;
+    private android.widget.HorizontalScrollView hScroll;       // the page can be wider than the screen when zoomed
+    private float zoom = 1f;                                   // 1 = the page fits the width; the page is drawn again at each zoom
+    private static final float MAX_ZOOM = 2.5f;
+    private android.view.ScaleGestureDetector scaleDetector;
+    private android.view.GestureDetector tapDetector;
+    private boolean multiTouch;                                // a pinch is going on: no swipe turns the page
+    private Integer pendingScrollX, pendingScrollY;            // where to scroll after a zoom, so the point under the fingers stays there
+    private Bitmap shownBitmap;
     private ImageView imageView;
     private TextView pageView;
 
@@ -155,8 +163,44 @@ public class MainActivity extends Activity {
         scrollView = new ScrollView(this);
         scrollView.setBackgroundColor(Color.DKGRAY);
         scrollView.setFocusable(false);
-        scrollView.addView(imageView, new ScrollView.LayoutParams(
+        imageView.setLayoutParams(new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT));
+        hScroll = new android.widget.HorizontalScrollView(this);
+        hScroll.setFillViewport(true);
+        hScroll.setHorizontalScrollBarEnabled(false);
+        hScroll.addView(imageView);
+        scrollView.addView(hScroll, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        // Pinch to zoom (the page is drawn again, sharp, when the fingers leave), double tap to zoom in or back out
+        scaleDetector = new android.view.ScaleGestureDetector(this, new android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            private float cumulative = 1f;
+
+            @Override public boolean onScaleBegin(android.view.ScaleGestureDetector d) {
+                cumulative = 1f;
+                imageView.setPivotX(d.getFocusX() + hScroll.getScrollX());
+                imageView.setPivotY(d.getFocusY() + scrollView.getScrollY());
+                return true;
+            }
+
+            @Override public boolean onScale(android.view.ScaleGestureDetector d) {
+                cumulative = Math.max(1f / zoom, Math.min(MAX_ZOOM / zoom, cumulative * d.getScaleFactor()));
+                imageView.setScaleX(cumulative);   // the picture is only stretched while the fingers are down
+                imageView.setScaleY(cumulative);
+                return true;
+            }
+
+            @Override public void onScaleEnd(android.view.ScaleGestureDetector d) {
+                imageView.setScaleX(1f);
+                imageView.setScaleY(1f);
+                zoomTo(zoom * cumulative, d.getFocusX(), d.getFocusY());
+            }
+        });
+        tapDetector = new android.view.GestureDetector(this, new android.view.GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onDoubleTap(MotionEvent e) {
+                zoomTo(zoom > 1.05f ? 1f : Math.min(2f, MAX_ZOOM), e.getX(), e.getY());
+                return true;
+            }
+        });
         // Swipe up / down turns the page, once the page cannot scroll any further
         // in that direction (so a page taller than the screen is still scrollable).
         scrollView.setOnTouchListener(new View.OnTouchListener() {
@@ -165,14 +209,22 @@ public class MainActivity extends Activity {
 
             @Override
             public boolean onTouch(View v, MotionEvent e) {
+                scaleDetector.onTouchEvent(e);
+                tapDetector.onTouchEvent(e);
+                if (scaleDetector.isInProgress() || e.getPointerCount() > 1) {
+                    multiTouch = true;
+                    return true; // a pinch: the page does not scroll, and no swipe follows
+                }
                 switch (e.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
+                        multiTouch = false;
                         downX = e.getX();
                         downY = e.getY();
                         atTop = !scrollView.canScrollVertically(-1);
                         atBottom = !scrollView.canScrollVertically(1);
                         break;
                     case MotionEvent.ACTION_UP:
+                        if (multiTouch || zoom > 1.05f) { multiTouch = false; break; } // zoomed: a drag moves the page, it does not turn it
                         float dx = e.getX() - downX;
                         float dy = e.getY() - downY;
                         float min = 120 * getResources().getDisplayMetrics().density / 2.6f;
@@ -825,6 +877,7 @@ public class MainActivity extends Activity {
             pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
             renderer = new PdfRenderer(pfd);
             page = 0;
+            zoom = 1f;
             loadCells(file);
             showPage();
         } catch (Exception e) {
@@ -982,15 +1035,16 @@ public class MainActivity extends Activity {
         if (vw == 0) return; // layout listener will call us back
 
         PdfRenderer.Page p = renderer.openPage(page);
-        float scale = (float) vw / p.getWidth(); // fit width
-        Bitmap bmp = Bitmap.createBitmap(vw, Math.max(1, (int) (p.getHeight() * scale)),
+        int bw = Math.max(1, Math.round(vw * zoom));
+        float scale = (float) bw / p.getWidth(); // fit width, times the zoom
+        Bitmap bmp = Bitmap.createBitmap(bw, Math.max(1, (int) (p.getHeight() * scale)),
                 Bitmap.Config.ARGB_8888);
         bmp.eraseColor(Color.WHITE);
         p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
         p.close();
 
         // the active bar, circled, when it is on this page
-        int scrollTo = 0;
+        int scrollTo = 0, scrollToX = 0;
         boolean lyrics = lyricsView();
         if (lyrics && highlight >= 1) { // the syllable of the active bar, on the lyrics page
             int lb = lyricBarOf(highlight);
@@ -1011,6 +1065,7 @@ public class MainActivity extends Activity {
                     canvas.drawRoundRect(r, pad, pad, paint);
                 }
                 scrollTo = (int) r.top;
+                scrollToX = (int) r.centerX();
             }
         }
         if (!lyrics && cells != null && highlight >= 1 && cells.page[highlight - 1] == page + 1) {
@@ -1027,6 +1082,7 @@ public class MainActivity extends Activity {
             paint.setColor(Color.rgb(255, 80, 0));
             canvas.drawOval(new android.graphics.RectF(mx - rx, my - ry, mx + rx, my + ry), paint);
             scrollTo = (int) cy;
+            scrollToX = (int) mx;
         }
         // the dot of the pass being played, in a repeat: filled over the black one
         if (!lyrics && cells != null && highlight >= 1 && cells.dotPage[highlight - 1] == page + 1) {
@@ -1040,10 +1096,34 @@ public class MainActivity extends Activity {
         }
 
         imageView.setImageBitmap(bmp);
-        final int target = scrollTo;
-        // keep the bar in view: a page taller than the screen scrolls to it
-        scrollView.post(() -> scrollView.scrollTo(0, Math.max(0, target - scrollView.getHeight() / 3)));
+        if (shownBitmap != null && shownBitmap != bmp) shownBitmap.recycle(); // a zoomed page is big: do not keep the old one
+        shownBitmap = bmp;
+        final int target = scrollTo, targetX = scrollToX;
+        final Integer keepX = pendingScrollX, keepY = pendingScrollY;
+        pendingScrollX = pendingScrollY = null;
+        scrollView.post(() -> {
+            if (keepX != null) { // just zoomed: the point under the fingers stays there
+                hScroll.scrollTo(Math.max(0, keepX), 0);
+                scrollView.scrollTo(0, Math.max(0, keepY));
+                return;
+            }
+            // keep the bar in view: a page taller than the screen scrolls to it, and a zoomed page to its side too
+            hScroll.scrollTo(zoom > 1.05f ? Math.max(0, targetX - scrollView.getWidth() / 2) : 0, 0);
+            scrollView.scrollTo(0, Math.max(0, target - scrollView.getHeight() / 3));
+        });
         pageView.setText("Page " + (page + 1) + " / " + renderer.getPageCount());
+    }
+
+    /** Zooms the page (1 to MAX_ZOOM), keeping the point (fx, fy) of the screen where it is. */
+    private void zoomTo(float newZoom, float fx, float fy) {
+        newZoom = Math.max(1f, Math.min(MAX_ZOOM, newZoom));
+        if (Math.abs(newZoom - zoom) < 0.02f || renderer == null) return;
+        float ratio = newZoom / zoom;
+        float contentX = fx + hScroll.getScrollX(), contentY = fy + scrollView.getScrollY(); // the point in the page picture
+        zoom = newZoom;
+        pendingScrollX = (int) (contentX * ratio - fx);
+        pendingScrollY = (int) (contentY * ratio - fy);
+        showPage();
     }
 
     private void turn(int delta) {
@@ -1051,6 +1131,7 @@ public class MainActivity extends Activity {
         int n = page + delta;
         if (n < 0 || n >= renderer.getPageCount()) return;
         page = n;
+        zoom = 1f;
         showPage();
     }
 
