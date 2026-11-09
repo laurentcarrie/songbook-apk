@@ -36,6 +36,7 @@ public class SongsActivity extends Activity {
     private String query = "";
     private String tag, book;
     private ListView list;
+    private IndexBar indexBar;
     private boolean authorFirst, fuzzyMode, recentOnly, starOnly;
     /** How many songs the "last opened" button lists. */
     static final int RECENT_COUNT = 10;
@@ -194,7 +195,14 @@ public class SongsActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         layout.addView(searchRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        layout.addView(list, new LinearLayout.LayoutParams(
+        // the A-Z strip: a letter jumps to the first song starting with it
+        indexBar = new IndexBar(this);
+        indexBar.setListener(this::jumpTo);
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.HORIZONTAL);
+        body.addView(list, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        body.addView(indexBar, new LinearLayout.LayoutParams(72, ViewGroup.LayoutParams.MATCH_PARENT));
+        layout.addView(body, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(layout);
     }
@@ -242,6 +250,38 @@ public class SongsActivity extends Activity {
             if (fuzzyMode ? fuzzy(query, text) : exact(query, text)) songs.add(s);
         }
         ((BaseAdapter) list.getAdapter()).notifyDataSetChanged();
+        updateIndex();
+    }
+
+    /** The index letter of a song: the first letter of what the list is sorted by ('#' for a digit or a symbol). */
+    private char letterOf(Song s) {
+        String n = normalize(authorFirst ? s.author : s.title);
+        for (int i = 0; i < n.length(); i++) {
+            char c = n.charAt(i);
+            if (c >= 'a' && c <= 'z') return Character.toUpperCase(c);
+            if (Character.isDigit(c)) return '#';
+        }
+        return '#';
+    }
+
+    /** The strip only makes sense on an alphabetical list: not for "10 derniers", nor a setlist in the order of its book. */
+    private void updateIndex() {
+        indexBar.setVisibility(!recentOnly && book == null ? View.VISIBLE : View.GONE);
+        java.util.Set<Character> present = new java.util.HashSet<>();
+        for (Song s : songs) present.add(letterOf(s));
+        indexBar.setPresent(present);
+    }
+
+    /** Scrolls to the first song whose letter is the given one or comes after it. */
+    private void jumpTo(char letter) {
+        int target = IndexBar.LETTERS.indexOf(letter);
+        for (int i = 0; i < songs.size(); i++) {
+            if (IndexBar.LETTERS.indexOf(letterOf(songs.get(i))) >= target) {
+                list.setSelectionFromTop(i, 0);
+                return;
+            }
+        }
+        list.setSelectionFromTop(Math.max(0, songs.size() - 1), 0);
     }
 
     /** True when the characters of the query appear in order in the text (case and accent insensitive). */
