@@ -9,6 +9,7 @@ import android.os.Environment;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 
 public class MenuActivity extends Activity {
     private static final int GREEN = Color.rgb(46, 125, 50), ORANGE = Color.rgb(239, 108, 0),
@@ -39,8 +40,30 @@ public class MenuActivity extends Activity {
         syncButton = addButton(layout, "🔄  Sync", Color.GRAY,
                 () -> startActivity(new Intent(this, SyncActivity.class)));
 
-        try { // the version of the apk, from versionName in app/build.gradle
-            setTitle("laurent-zik v" + getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
+        // the title bar: the app name on the left, the version of the apk (versionName in app/build.gradle) on the right
+        try {
+            String version = "v" + getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            android.app.ActionBar bar = getActionBar();
+            if (bar != null) {
+                TextView name = new TextView(this);
+                name.setText("laurent-zik");
+                name.setTextSize(20);
+                name.setTextColor(Color.rgb(33, 33, 33));
+                TextView ver = new TextView(this);
+                ver.setText(version);
+                ver.setTextSize(16);
+                ver.setTextColor(Color.GRAY);
+                LinearLayout row = new LinearLayout(this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.addView(name, new LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                row.addView(ver, new LinearLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
+                row.setPadding(0, 0, 0, 0);
+                bar.setDisplayShowTitleEnabled(false);
+                bar.setDisplayShowCustomEnabled(true);
+                bar.setCustomView(row, new android.app.ActionBar.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+            }
         } catch (Exception ignored) { }
 
         android.widget.ScrollView scroll = new android.widget.ScrollView(this);
