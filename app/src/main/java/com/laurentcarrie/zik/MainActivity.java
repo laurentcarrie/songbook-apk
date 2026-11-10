@@ -96,6 +96,7 @@ public class MainActivity extends Activity {
     private int songIndex = 0;
 
     private ScrollView scrollView;
+    private View.OnTouchListener pageTouch;                         // swipes, pinch and double tap on the page
     private android.widget.HorizontalScrollView hScroll;       // the page can be wider than the screen when zoomed
     private float zoom = 1f;                                   // 1 = the page fits the width; the page is drawn again at each zoom
     private static final float MAX_ZOOM = 2.5f;
@@ -160,7 +161,15 @@ public class MainActivity extends Activity {
         imageView.setAdjustViewBounds(true);
         imageView.setScaleType(ImageView.ScaleType.FIT_XY);
 
-        scrollView = new ScrollView(this);
+        // The page gesture handler (below) must see every event, the finger-down too: the
+        // HorizontalScrollView inside consumes the down, so a listener set on this view
+        // never saw it and swipes up / down never turned the page.
+        scrollView = new ScrollView(this) {
+            @Override public boolean dispatchTouchEvent(MotionEvent e) {
+                if (pageTouch != null && pageTouch.onTouch(this, e)) return true;
+                return super.dispatchTouchEvent(e);
+            }
+        };
         scrollView.setBackgroundColor(Color.DKGRAY);
         scrollView.setFocusable(false);
         imageView.setLayoutParams(new android.widget.FrameLayout.LayoutParams(
@@ -203,7 +212,7 @@ public class MainActivity extends Activity {
         });
         // Swipe up / down turns the page, once the page cannot scroll any further
         // in that direction (so a page taller than the screen is still scrollable).
-        scrollView.setOnTouchListener(new View.OnTouchListener() {
+        pageTouch = new View.OnTouchListener() {
             private float downX, downY;
             private boolean atTop, atBottom;
 
@@ -239,7 +248,7 @@ public class MainActivity extends Activity {
                 }
                 return false; // let the ScrollView scroll as usual
             }
-        });
+        };
         scrollView.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             if ((r - l) != (or - ol)) showPage();
         });
