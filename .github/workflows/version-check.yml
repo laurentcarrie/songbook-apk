@@ -1,0 +1,34 @@
+# A pull request into main must bump the version (run `make bump`): versionCode
+# has to be greater than on main, and versionName has to be different.
+# To make this check block the merge, mark "version bumped" as a required
+# status check in the branch protection rules of main.
+name: version check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  version-bumped:
+    name: version bumped
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare with the base branch
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          code()   { sed -n "s/^ *versionCode \([0-9][0-9]*\)$/\1/p" ; }
+          name()   { sed -n "s/^ *versionName '\(.*\)'$/\1/p" ; }
+          new_code=$(code < app/build.gradle);  new_name=$(name < app/build.gradle)
+          old_code=$(git show "$BASE:app/build.gradle" | code)
+          old_name=$(git show "$BASE:app/build.gradle" | name)
+          echo "main: $old_name ($old_code)   this PR: $new_name ($new_code)"
+          [ -n "$new_code" ] && [ -n "$new_name" ] && [ -n "$old_code" ] || { echo "versionCode / versionName not found in app/build.gradle"; exit 1; }
+          if [ "$new_code" -le "$old_code" ] || [ "$new_name" = "$old_name" ]; then
+            echo "::error file=app/build.gradle::version not bumped: run 'make bump' and commit app/build.gradle"
+            exit 1
+          fi
