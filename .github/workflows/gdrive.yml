@@ -29,6 +29,11 @@ jobs:
           java-version: '17'
           cache: gradle
 
+      # gradle.properties points at this machine's jdk and trust store: drop them,
+      # the runner uses the JDK from setup-java and its own certificates.
+      - name: Drop machine-specific gradle settings
+        run: sed -i '/^org.gradle.java.home=/d; /^systemProp.javax.net.ssl/d' gradle.properties
+
       - name: Signing key
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
