@@ -20,7 +20,7 @@ public class SyncActivity extends Activity {
     private Button syncButton;
     private CheckBox pdfBox, mp3Box, rendersBox, forceBox;
     private SharedPreferences prefs;
-    private TextView status, summary;
+    private TextView status, summary, lastSync;
     /** Per archive (pdf, mp3, mp3-renders): 0 up to date, 1 update available, 2 unreachable, -1 not checked yet. */
     private final int[] state = {-1, -1, -1};
     private ProgressBar bar;
@@ -46,6 +46,12 @@ public class SyncActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         slp.setMargins(0, 0, 0, 32);
         layout.addView(summary, slp);
+        lastSync = new TextView(this);
+        lastSync.setTextSize(20);
+        lastSync.setTextColor(Color.DKGRAY);
+        lastSync.setGravity(Gravity.CENTER);
+        layout.addView(lastSync, slp);
+        showLastSync();
         pdfBox = addCheckBox(layout, PDF_LABEL, "sync_pdf", true);
         mp3Box = addCheckBox(layout, MP3_LABEL, "sync_mp3", false);
         rendersBox = addCheckBox(layout, RENDERS_LABEL, "sync_renders", false);
@@ -70,16 +76,34 @@ public class SyncActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        showLastSync();
+        if (syncButton.isEnabled()) { // opening the page: the message of the last sync goes (not while a sync is running)
+            status.setVisibility(View.GONE);
+            status.setText("");
+        }
         checkUpToDate();
+    }
+
+    /** The date of the last successful sync, kept in the preferences. */
+    private void showLastSync() {
+        long t = prefs.getLong("last_sync", 0);
+        lastSync.setText("Dernière synchro : " + (t == 0 ? "jamais"
+                : new java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.FRANCE).format(new java.util.Date(t))));
     }
 
     /** Checks, in the background, which archives changed on the server, and says so next to each box. */
     private void checkUpToDate() {
         if (!Environment.isExternalStorageManager()) return;
+        CheckBox[] boxes = {pdfBox, mp3Box, rendersBox};
+        String[] labels = {PDF_LABEL, MP3_LABEL, RENDERS_LABEL};
+        // forget the previous answers at once: the page shows that it is checking, not an old state
+        for (int i = 0; i < boxes.length; i++) {
+            state[i] = -1;
+            boxes[i].setText(labels[i] + " — vérification…");
+        }
+        updateSummary();
         new Thread(() -> {
             String[] names = {"pdf", "mp3", "mp3-renders"};
-            CheckBox[] boxes = {pdfBox, mp3Box, rendersBox};
-            String[] labels = {PDF_LABEL, MP3_LABEL, RENDERS_LABEL};
             for (int i = 0; i < names.length; i++) {
                 String suffix;
                 try {
@@ -154,8 +178,10 @@ public class SyncActivity extends Activity {
             prefs.edit().putBoolean(key, on).apply();
             updateSummary();
         });
-        layout.addView(c, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.START; // boxes in a left-aligned column, each text right after its box
+        layout.addView(c, lp);
         return c;
     }
 
@@ -192,6 +218,7 @@ public class SyncActivity extends Activity {
                 if (doMp3) done.add(describe(Storage.syncArchive("mp3", prefs, force, prog), "MP3"));
                 if (doRenders) done.add(describe(Storage.syncArchive("mp3-renders", prefs, force, prog), "MP3 renders"));
                 msg = "Synchro : " + String.join(", ", done);
+                prefs.edit().putLong("last_sync", System.currentTimeMillis()).apply();
             } catch (Exception e) {
                 msg = "Échec de la synchro : " + e.getMessage();
             }
@@ -200,6 +227,7 @@ public class SyncActivity extends Activity {
                 bar.setVisibility(View.GONE);
                 setSyncEnabled(true);
                 status.setText(m);
+                showLastSync();
                 Toast.makeText(this, m, Toast.LENGTH_LONG).show();
                 checkUpToDate();
             });
