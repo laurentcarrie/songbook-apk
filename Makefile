@@ -24,9 +24,9 @@ release: ## build the signed release apk (needs keystore.properties)
 	./gradlew assembleRelease -q
 	@ls -l app/build/outputs/apk/release/laurent-zik-release.apk
 
-GDRIVE_FILE := gdrive:apk/laurent-zik.apk
+GDRIVE_FILE := gdrive:apk/laurent-zik/laurent-zik.apk
 
-gdrive: release ## build the release apk and upload it as laurent-zik.apk to gdrive:apk with rclone
+gdrive: release ## build the release apk and upload it as laurent-zik.apk to gdrive:apk/laurent-zik with rclone
 	rclone copyto -v app/build/outputs/apk/release/laurent-zik-release.apk $(GDRIVE_FILE)
 	@rclone lsl $(GDRIVE_FILE)
 
